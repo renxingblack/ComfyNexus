@@ -1,0 +1,197 @@
+/**
+ * 右侧环境状态面板组件
+ *
+ * 功能：
+ * - 工具箱：4 种终端启动器（cmd / PowerShell / Windows Terminal / VS2022 x64 Native Tools）
+ * - 显示系统信息
+ * - 显示硬件资源
+ * - 刷新按钮
+ */
+
+import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from '@/utils/toast'
+import { useDependencyStore } from '@/stores/useDependencyStore'
+import { Button } from '@/components/ui/Button'
+import {
+  RefreshCw, Terminal, SquareTerminal, AppWindow, Hammer, Loader2,
+} from 'lucide-react'
+
+type TerminalKind = 'cmd' | 'powershell' | 'windowsterminal' | 'vs2022'
+
+export default function RightStatusPanel() {
+  const { t } = useTranslation()
+  const {
+    envInfo,
+    detectEnvironment,
+    openTerminalKind,
+  } = useDependencyStore()
+
+  const [openingKind, setOpeningKind] = useState<TerminalKind | null>(null)
+
+  // 处理刷新
+  const handleRefresh = () => {
+    detectEnvironment()
+  }
+
+  // 打开指定类型终端（工作目录 = 当前选中环境的 Python 所在目录）
+  const handleOpenTerminal = async (kind: TerminalKind) => {
+    setOpeningKind(kind)
+    try {
+      await openTerminalKind(kind)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOpeningKind(null)
+    }
+  }
+
+  const terminalItems: Array<{
+    kind: TerminalKind
+    icon: React.ReactNode
+    label: string
+  }> = [
+    { kind: 'cmd', icon: <SquareTerminal className="size-4" />, label: t('dependency.openCmd') },
+    { kind: 'powershell', icon: <Terminal className="size-4" />, label: t('dependency.openPowerShell') },
+    { kind: 'windowsterminal', icon: <AppWindow className="size-4" />, label: t('dependency.openWindowsTerminal') },
+    { kind: 'vs2022', icon: <Hammer className="size-4" />, label: t('dependency.openVS2022') },
+  ]
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-y-auto">
+      {/* 工具箱卡片：4 种终端 */}
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <h3 className="mb-3 font-semibold text-content-primary">{t("dependency.toolbox")}</h3>
+        <div className="grid grid-cols-2 gap-2">
+          {terminalItems.map((item) => (
+            <Button
+              key={item.kind}
+              variant="outline"
+              size="sm"
+              onClick={() => handleOpenTerminal(item.kind)}
+              disabled={openingKind !== null}
+              className="w-full justify-start"
+              title={t('dependency.terminalCwdHint')}
+            >
+              {openingKind === item.kind ? (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              ) : (
+                item.icon
+              )}
+              <span className="truncate">{item.label}</span>
+            </Button>
+          ))}
+        </div>
+        <p className="text-muted-foreground mt-2 text-xs">{t('dependency.terminalCwdHint')}</p>
+      </div>
+
+      {/* 环境信息卡片 */}
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-semibold text-content-primary">{t("dependency.envInfo")}</h3>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleRefresh}
+          >
+            <RefreshCw className="size-4" />
+          </Button>
+        </div>
+
+        {!envInfo ? (
+          <div className="text-sm text-content-secondary">
+            {t('dependency.detecting')}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* 系统信息 */}
+            <div>
+              <h4 className="mb-2 text-sm font-medium text-content-primary">{t("dependency.systemInfo")}</h4>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">{t("dependency.system")}:</span>
+                  <span className="text-right text-content-primary">{envInfo.windowsVersion || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 硬件资源 */}
+            <div>
+              <h4 className="mb-2 text-sm font-medium text-content-primary">{t("dependency.hardwareResources")}</h4>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">GPU:</span>
+                  <span className="text-right text-content-primary">{envInfo.gpu?.model || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">{t("dependency.vram")}:</span>
+                  <span className="text-right text-content-primary">{envInfo.gpu?.vram || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">CPU：</span>
+                  <span className="text-right text-content-primary">{envInfo.cpu?.model || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">{t("dependency.memory")}:</span>
+                  <span className="text-right text-content-primary">{envInfo.cpu?.ram || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 软件依赖 */}
+            <div>
+              <h4 className="mb-2 text-sm font-medium text-content-primary">{t("dependency.softwareDeps")}</h4>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">Python：</span>
+                  <span className="text-right text-content-primary">{envInfo.python?.version || envInfo.pythonVersion}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">{t("dependency.path")}:</span>
+                  <span className="max-w-[200px] truncate text-right text-xs text-content-primary" title={envInfo.python?.path || envInfo.pythonPath}>
+                    {envInfo.python?.path || envInfo.pythonPath}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">CUDA：</span>
+                  <span className="text-right text-content-primary">{envInfo.cuda?.version || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">PyTorch:</span>
+                  <span className="text-right text-content-primary">{envInfo.dependencies?.pytorch || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">Transformer:</span>
+                  <span className="text-right text-content-primary">{envInfo.dependencies?.transformer || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 注意力依赖 */}
+            <div>
+              <h4 className="mb-2 text-sm font-medium text-content-primary">{t("dependency.attentionDeps")}</h4>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">Flash Attention:</span>
+                  <span className="text-right text-content-primary">{envInfo.dependencies?.flashAttn || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">Sage Attention:</span>
+                  <span className="text-right text-content-primary">{envInfo.dependencies?.sageAttention || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">Comfy Kitchen Attention:</span>
+                  <span className="text-right text-content-primary">{envInfo.dependencies?.ckAttention || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-content-secondary">xFormers:</span>
+                  <span className="text-right text-content-primary">{envInfo.dependencies?.xformers || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
