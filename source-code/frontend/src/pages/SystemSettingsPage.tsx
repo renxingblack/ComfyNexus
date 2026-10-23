@@ -527,9 +527,11 @@ export default function SystemSettingsPage() {
                       }
                     }}
                   >
-                    <option value="3400x1800">3400×1800</option>
-                    <option value="1680x1080">1680×1080</option>
-                    <option value="1280x720">1280×720</option>
+                    {Object.entries(WINDOW_SIZES).map(([key, size]) => (
+                      <option key={key} value={key}>
+                        {size.label}
+                      </option>
+                    ))}
                     <option value="custom">{t('settings.windowSize.custom')}</option>
                   </NativeSelect>
                   
@@ -540,7 +542,7 @@ export default function SystemSettingsPage() {
                         value={customWidth}
                         onChange={(e) => setCustomWidth(e.target.value)}
                         placeholder={t('settings.windowSize.widthPlaceholder')}
-                        min={800}
+                        min={1024}
                         max={7680}
                         className="w-20 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                       />
@@ -551,7 +553,7 @@ export default function SystemSettingsPage() {
                         value={customHeight}
                         onChange={(e) => setCustomHeight(e.target.value)}
                         placeholder={t('settings.windowSize.heightPlaceholder')}
-                        min={600}
+                        min={640}
                         max={4320}
                         className="w-20 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                       />
