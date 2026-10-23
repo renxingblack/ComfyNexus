@@ -6,9 +6,11 @@
 
 <p><strong>为专业创作者而生的 ComfyUI 现代化管理平台</strong></p>
 
+<p><em>本仓库基于原项目 <a href="https://github.com/Allen-xxa/ComfyNexus">Allen-xxa/ComfyNexus</a> 的 v1.2.6 继续开发，当前版本 <strong>v1.3.0</strong>，原作者及原始更新日志完整保留。</em></p>
+
 <p>
-  <a href="https://github.com/Allen-xxa/ComfyNexus/releases">
-    <img src="https://img.shields.io/github/v/release/Allen-xxa/ComfyNexus?style=flat-square&color=3b82f6" alt="Version">
+  <a href="https://github.com/renxingblack/ComfyNexus/releases">
+    <img src="https://img.shields.io/github/v/release/renxingblack/ComfyNexus?style=flat-square&color=3b82f6" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
@@ -16,8 +18,8 @@
   <a href="https://www.microsoft.com/windows">
     <img src="https://img.shields.io/badge/platform-Windows-6366f1?style=flat-square" alt="Platform">
   </a>
-  <a href="https://github.com/Allen-xxa/ComfyNexus/releases">
-    <img src="https://img.shields.io/github/downloads/Allen-xxa/ComfyNexus/total?style=flat-square&color=f59e0b" alt="Downloads">
+  <a href="https://github.com/renxingblack/ComfyNexus/releases">
+    <img src="https://img.shields.io/github/downloads/renxingblack/ComfyNexus/total?style=flat-square&color=f59e0b" alt="Downloads">
   </a>
 </p>
 
@@ -73,7 +75,7 @@
 
 ### 🧩 插件管理
 
-- **已安装插件一览** — 展示名称、分支、版本、更新状态
+- **已安装插件一览** — 展示名称、分支、版本、更新状态、文件夹占用大小
 - **一键更新** — 单个或批量更新，更新前自动备份
 - **分支切换** — 在不同分支间自由切换
 - **启用/禁用** — 快速启用或禁用插件，无需删除
@@ -97,6 +99,14 @@
 - **环境快照备份** — 一键创建快照，可选择备份范围
 - **智能回滚** — 一键恢复到任意历史快照
 - **进程安全检查** — 回滚前自动检测 ComfyUI 运行状态
+
+### 📦 模型管理
+
+- **本地模型库** — 扫描环境 `models/` 全部子目录（checkpoints / loras / vae / controlnet 等）
+- **多源网络下载** — 自动识别 HuggingFace / HF-Mirror / ModelScope / Civitai / 直链，断点续传
+- **网络链接同步** — 自动匹配下载地址：默认魔搭社区优先、没有则用 HuggingFace
+- **手动关联链接** — 单个模型可单独指定候选链接或手动输入下载地址
+- **多文件夹管理** — 本地模型目录可多路径配置、逐个开关，清空即不显示
 
 ### 🎨 LoRA 管理
 
@@ -147,6 +157,7 @@
 - **代理设置** — 支持 Git、pip、AI 请求等全链路代理
 - **模块管理** — 自定义启用/禁用功能模块，侧边栏支持拖拽排序
 - **自动更新** — 应用启动时自动检查新版本
+- **窗口自由缩放** — 四角与四边均可拖动调整大小，支持 9 组常用分辨率预设
 
 ---
 
@@ -162,7 +173,7 @@
 
 ### 安装步骤
 
-1. **下载** 最新 [Releases](https://github.com/Allen-xxa/ComfyNexus/releases) 压缩包
+1. **下载** 最新 [Releases](https://github.com/renxingblack/ComfyNexus/releases) 压缩包
 2. **解压** 即可使用（绿色免安装）
 3. **启动** 运行 `ComfyNexus.exe`，首次启动选择你的 ComfyUI 根目录
 
@@ -201,9 +212,17 @@
 
 ---
 
+## 🙏 致谢与许可
+
+本项目基于原项目 [Allen-xxa/ComfyNexus](https://github.com/Allen-xxa/ComfyNexus)（MIT 协议）继续开发，
+原作者为 Allen-xxa，原始仓库地址、版权声明与历史更新日志均完整保留。
+v1.3.0 及之后的新增功能与优化由本仓库维护，遵循 MIT 协议发布。
+
+---
+
 ## 🤝 参与贡献
 
-欢迎提交 [Issue](https://github.com/Allen-xxa/ComfyNexus/issues) 或 [Pull Request](https://github.com/Allen-xxa/ComfyNexus/pulls)
+欢迎提交 [Issue](https://github.com/renxingblack/ComfyNexus/issues) 或 [Pull Request](https://github.com/renxingblack/ComfyNexus/pulls)
 
 **Made with ❤️ by ComfyNexus Team**
 
