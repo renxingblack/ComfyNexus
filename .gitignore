@@ -253,3 +253,7 @@ MinGit*/
 # 本地运行配置（含用户 API Key，不入库；仓库提供 .example.json 模板）
 source-code/backend/config/lora_config.json
 source-code/backend/config/search_config.json
+
+# 发布包与打包产物（体积大，发布到 GitHub Release 而非仓库）
+source-code/发布包/
+source-code/dist/
