@@ -4,6 +4,7 @@ API 类
 """
 
 import time
+import os
 import threading
 from typing import Dict, Optional
 from pathlib import Path
@@ -31,6 +32,28 @@ from backend.src.utils import image_downloader
 
 _commit_time_cache: Dict[str, dict] = {}
 _COMMIT_TIME_CACHE_TTL = 3600
+
+# ---------- 可选：WebView2 远程调试端口（CDP） ----------
+#
+# 为什么放在这个模块的**模块级**、而不是 main.py：
+#   main.py 是 PyInstaller 的入口脚本（__main__），打包后只存在于 PYZ 字节码里，
+#   不走 `_BackendDiskFinder` 的磁盘热部署，改它等于没改。
+#   而 backend.* 包内的模块都从磁盘加载，改这里立刻生效。
+#
+# 为什么需要 CDP：本项目的四角拖动缩放是「前端热区 mousedown → 后端轮询光标」，
+# 端到端验收必须能真实派发 DOM 鼠标事件（Input.dispatchMouseEvent）。
+# 系统级 mouse_event 注入在本环境对 WebView2 无效，只有 CDP 能真正送达页面。
+#
+# 默认关闭（端口为 None 时不加 --remote-debugging-port 参数），
+# 只有显式设置环境变量 COMFYNEXUS_CDP_PORT 才开启，避免把调试端口暴露给普通用户。
+_cdp_port = os.environ.get("COMFYNEXUS_CDP_PORT", "").strip()
+if _cdp_port.isdigit():
+    try:
+        import webview as _webview
+        _webview.settings["REMOTE_DEBUGGING_PORT"] = int(_cdp_port)
+    except Exception:  # pragma: no cover - 仅调试用途，失败不影响正常启动
+        pass
+
 
 
 class Api:
@@ -443,15 +466,19 @@ class Api:
                         hwnd = user32.FindWindowW(None, "ComfyNexus")
                     
                     if hwnd and hwnd != 0:
-                        # 先还原窗口
+                        # 先还原窗口（位置必须钳制进工作区，否则顶边可能跑到
+                        # 屏幕外，导致窗口上两个角点不到、拖角像「没反应」）
                         if self._window_state:
                             x = self._window_state['x']
                             y = self._window_state['y']
                             width = self._window_state['width']
                             height = self._window_state['height']
-                            
-                            # SWP_NOZORDER = 0x0004
-                            user32.SetWindowPos(hwnd, None, x, y, width, height, 0x0004)
+
+                            try:
+                                from backend.src.utils.window_bounds import apply_window_rect
+                                apply_window_rect(hwnd, x, y, width, height, clamp=True)
+                            except Exception:
+                                user32.SetWindowPos(hwnd, None, x, y, width, height, 0x0004)
                             logger.debug(f"[最小化] 已还原窗口: ({x}, {y}), {width}x{height}")
                         
                         self._is_maximized = False
@@ -516,11 +543,29 @@ class Api:
                 if hwnd and hwnd != 0:
                     user32 = ctypes.windll.user32
 
-                    if self._is_maximized:
-                        logger.debug("[最大化] 还原窗口")
+                    # **以真实窗口状态为准，不信内部标志**（本轮实测的坑）。
+                    #
+                    # 原来判断 `if self._is_maximized:`，但那个标志有多个写入点
+                    # （main.py 的 on_webview_ready、update_settings 的副作用、
+                    #  resizeWindow、全屏切换……），任何一处漏同步就会出现
+                    # 「窗口明明最大化着，标志却是 False」——
+                    # 于是点"还原"反而走"最大化"分支，窗口纹丝不动，
+                    # 用户连点两下都还原不了（实测复现：第二次冷启动后必然触发）。
+                    #
+                    # IsZoomed(hwnd) 是系统真实状态，永远准。标志只作为回写缓存。
+                    really_maximized = bool(user32.IsZoomed(hwnd))
+                    if really_maximized != self._is_maximized:
+                        logger.info(
+                            f"[最大化] 内部标志({self._is_maximized}) 与真实状态"
+                            f"({really_maximized}) 不一致，以真实状态为准"
+                        )
+                        self._is_maximized = really_maximized
+
+                    if really_maximized:
+                        logger.info("[最大化] 还原窗口")
                         width, height = self._get_settings_window_size()
-                        logger.debug(f"[最大化] 从设置获取窗口大小: {width}x{height}")
-                        
+                        logger.info(f"[最大化] 从设置获取窗口大小: {width}x{height}")
+
                         if self._window_state:
                             x = self._window_state['x']
                             y = self._window_state['y']
@@ -528,8 +573,40 @@ class Api:
                             x = 100
                             y = 100
 
-                        user32.SetWindowPos(hwnd, None, x, y, width, height, 0x0004)
-                        logger.debug(f"[最大化] 还原到: ({x}, {y}), 大小: {width}x{height}")
+                        # **必须先 SW_RESTORE 再设尺寸**（本轮实测的坑）。
+                        #
+                        # 窗口处于 WS_MAXIMIZE 状态时，SetWindowPos 改尺寸**无效**：
+                        # 系统在 WS_MAXIMIZE 位存在时会忽略位置/尺寸参数，
+                        # 结果就是"调用成功但窗口纹丝不动"。
+                        # 实测日志：还原后 geo 仍是 (0,0,1920,1032)、IsZoomed 仍 True，
+                        # 而内部标志已被置 False —— 于是下一击又走"最大化"分支，
+                        # 用户感知就是"还原按钮没用"。
+                        #
+                        # 顺序必须是：ShowWindow(SW_RESTORE=9) 清掉 WS_MAXIMIZE
+                        # → 再 SetWindowPos 设目标矩形。
+                        try:
+                            if user32.IsZoomed(hwnd):
+                                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                                time.sleep(0.06)
+                        except Exception as _rs:
+                            logger.debug(f"[最大化] SW_RESTORE 失败（忽略）: {_rs}")
+
+                        try:
+                            from backend.src.utils.window_bounds import apply_window_rect
+                            # clamp=True：钳到工作区（排除任务栏）。
+                            # 与四角拖动完全同一口径 —— 拖动那边也钳到工作区。
+                            # 若这里放宽成 clamp=False，窗口会盖住任务栏，
+                            # 底部两个热区落到任务栏下面变得点不到
+                            # （实测：还原成 1680x1080 后，右下角热区在 y=1071，
+                            #  鼠标根本够不着，用户以为"缩放又坏了"）。
+                            apply_window_rect(hwnd, x, y, width, height, clamp=True)
+                        except Exception:
+                            user32.SetWindowPos(hwnd, None, x, y, width, height, 0x0004)
+                        logger.info(f"[最大化] 还原到: ({x}, {y}), 大小: {width}x{height}")
+
+                        # 从最大化还原后重新应用 frameless + WS_THICKFRAME，
+                        # 避免系统在 SW_RESTORE 过程中重算样式导致四角缩放失效。
+                        self._refresh_corner_resize(hwnd)
 
                         self._is_maximized = False
                     else:
@@ -554,24 +631,44 @@ class Api:
                         logger.debug(f"[最大化] 当前显示器工作区大小: {work_width}x{work_height}")
                         logger.debug(f"[最大化] 当前显示器工作区位置: ({work_left}, {work_top})")
 
-                        # 移动并调整窗口大小到当前显示器的工作区
-                        # SWP_NOZORDER = 0x0004
-                        user32.SetWindowPos(
-                            hwnd, 
-                            None, 
-                            work_left, 
-                            work_top, 
-                            work_width, 
-                            work_height, 
-                            0x0004
-                        )
+                        # **用真正的 SW_MAXIMIZE，而不是 SetWindowPos 硬摆矩形**。
+                        #
+                        # 原实现直接 SetWindowPos 铺满工作区，看起来效果一样，
+                        # 但**不设置 WS_MAXIMIZE 位** → `IsZoomed(hwnd)` 永远是 False。
+                        # 后果（本轮实测）：
+                        #   - maximizeApp 无法可靠判断"该最大化还是该还原"；
+                        #   - 前端 isMaximized() 读到 False，于是在最大化窗口上
+                        #     画出四角热区，用户点角毫无反应；
+                        #   - 第二次点"还原"时走错分支，窗口纹丝不动。
+                        #
+                        # 工作区限制由 WM_GETMINMAXINFO 钩子保证
+                        # （ptMaxSize/ptMaxPosition 已改写为工作区矩形），
+                        # 所以 SW_MAXIMIZE 不会盖住任务栏。
+                        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE = 3
+                        time.sleep(0.06)
+                        try:
+                            from backend.src.utils.window_bounds import (
+                                refresh_corner_resize,
+                            )
+                            refresh_corner_resize(
+                                hwnd,
+                                min_width=round(1024 * self._dpi_scale),
+                                min_height=round(640 * self._dpi_scale),
+                            )
+                        except Exception as _rf:
+                            logger.debug(f"[最大化] 刷新钩子失败（忽略）: {_rf}")
 
                         logger.debug("[最大化] 窗口已最大化到当前显示器的工作区")
                         self._is_maximized = True
+                    # 返回真实状态，供前端/验收脚本判断本次是"最大化"还是"还原"。
+                    # 原来没有 return，pywebview 序列化成 null，调用方无法区分成败。
+                    return {"success": True, "maximized": bool(self._is_maximized)}
                 else:
                     # 降级方案：使用 pywebview API
                     logger.debug("[最大化] 窗口句柄获取失败，使用降级方案")
                     self._maximize_fallback()
+                    return {"success": True, "maximized": bool(self._is_maximized),
+                            "degraded": True}
 
             except Exception as e:
                 logger.error(f"[最大化] 异常: {e}")
@@ -579,10 +676,32 @@ class Api:
                 traceback.print_exc()
                 # 降级方案
                 self._maximize_fallback()
+                return {"success": False, "message": str(e)}
 
     
     def isMaximized(self):
-        """检查窗口是否最大化"""
+        """检查窗口是否最大化。
+
+        **以系统真实状态为准，不用内部标志**（本轮实测的坑）。
+        内部 `_is_maximized` 有多个写入点（on_webview_ready、update_settings
+        的副作用、resizeWindow、全屏切换），漏同步就会出现"标志 False 但窗口
+        实际最大化"。前端 ResizeHandles 靠这个返回值决定是否画四角热区 ——
+        标志错了就会在最大化窗口上画出热区（点角毫无反应），
+        或者在已还原的窗口上不画热区（拖不动）。两种都是用户直接感知的 bug。
+        """
+        try:
+            hwnd = self._get_hwnd()
+            if hwnd:
+                import ctypes
+                real = bool(ctypes.windll.user32.IsZoomed(hwnd))
+                if real != self._is_maximized:
+                    logger.debug(
+                        f"[isMaximized] 校准内部标志 {self._is_maximized} → {real}"
+                    )
+                    self._is_maximized = real
+                return real
+        except Exception as exc:
+            logger.debug(f"[isMaximized] 查询真实状态失败，回退内部标志: {exc}")
         return self._is_maximized
     
     def set_dpi_scale(self, dpi_scale: float):
@@ -687,21 +806,116 @@ class Api:
             logger.error(f"[窗口尺寸] 读取配置失败: {e}")
         return round(1680 * self._dpi_scale), round(1080 * self._dpi_scale)
 
-    def _save_window_rect(self, hwnd):
-        """保存窗口位置和大小"""
+    def _get_hwnd(self):
+        """取当前有效窗口句柄（gui.hwnd → FindWindowW 兜底）。
+
+        统一收口，避免各处重复写 try/except，也避免某些路径忘了取 hwnd
+        就直接调 pywebview API（历史上 resizeWindow 就是这么漏掉句柄的）。
+        """
         try:
-            from backend.src.utils.window_bounds import get_window_rect
-            
+            if self._window is not None:
+                gui = getattr(self._window, 'gui', None)
+                hwnd = getattr(gui, 'hwnd', None) if gui else None
+                if hwnd:
+                    return hwnd
+        except Exception:
+            pass
+        try:
+            import ctypes
+            return ctypes.windll.user32.FindWindowW(None, "ComfyNexus")
+        except Exception:
+            return 0
+
+    def _restore_window_rect_clamped(self, hwnd=None):
+        """把窗口恢复到「上次保存的矩形」，并强制钳制进当前显示器工作区。
+
+        为什么必须钳制：窗口尺寸一旦等于/超过屏幕高度，居中或恢复后的
+        顶边会落到工作区上边界之上（实测 y=-48，正好是任务栏高度）。
+        这样窗口的**上边两个角在屏幕外**，鼠标移不过去，
+        用户感知就是「拖角完全没反应」。
+        """
+        try:
+            import ctypes
+            from backend.src.utils.window_bounds import apply_window_rect
+
+            hwnd = hwnd or self._get_hwnd()
+            if not hwnd:
+                return False
+
+            state = self._window_state or {}
+            width = state.get("width") or round(1680 * self._dpi_scale)
+            height = state.get("height") or round(1080 * self._dpi_scale)
+            x = state.get("x")
+            y = state.get("y")
+            if x is None or y is None:
+                info = ctypes.windll.user32.GetSystemMetrics
+                x = max(0, (info(0) - width) // 2)
+                y = max(0, (info(1) - height) // 2)
+
+            ok = apply_window_rect(hwnd, x, y, width, height, clamp=True)
+            logger.debug(f"[窗口恢复] 钳制到工作区: ({x},{y}) {width}x{height} -> {ok}")
+            return ok
+        except Exception as exc:
+            logger.debug(f"[窗口恢复] 失败（忽略）: {exc}")
+            return False
+
+    def _refresh_corner_resize(self, hwnd=None):
+        """状态切换（全屏进出 / 最大化还原）后，重新确保「四角原生缩放」依然可用。
+
+        pywebview 的 winforms 后端在退出全屏时执行 `FormBorderStyle = old_style`，
+        WinForms 会因此重算 GWL_STYLE 并可能重建窗口句柄，把为原生缩放刻意保留的
+        WS_THICKFRAME 位清掉、或让已装的钩子失效。表现为「进出一次全屏后，拖角
+        不再改变尺寸」。这里统一收尾：复位 frameless 样式 + 重新安装窗口钩子。
+        """
+        try:
+            if not hwnd:
+                try:
+                    if self._window is not None:
+                        gui = getattr(self._window, 'gui', None)
+                        hwnd = getattr(gui, 'hwnd', None) if gui else None
+                except Exception:
+                    hwnd = None
+            if not hwnd:
+                import ctypes
+                hwnd = ctypes.windll.user32.FindWindowW(None, "ComfyNexus")
+            if not hwnd:
+                return
+            from backend.src.utils.window_bounds import refresh_corner_resize
+            dpi_scale = getattr(self, '_dpi_scale', 1.0) or 1.0
+            refresh_corner_resize(
+                hwnd,
+                min_width=round(1024 * dpi_scale),
+                min_height=round(640 * dpi_scale),
+            )
+        except Exception as e:
+            logger.debug(f"[四角缩放] 状态切换后刷新失败（忽略）: {e}")
+
+    def _save_window_rect(self, hwnd):
+        """保存窗口位置和大小
+
+        注意：这里保存的矩形会被后续的「还原」路径直接复用。
+        若当前窗口本身就超出工作区（例如高度 1080 而工作区只有 1032，
+        顶边跑到 y=-48），把这个坏坐标原样存下来，下次还原又回到屏幕外，
+        形成「拖角永远点不到上两个角」的循环。
+        因此保存前先钳制进工作区。
+        """
+        try:
+            from backend.src.utils.window_bounds import get_window_rect, clamp_rect_to_workarea
+
             rect = get_window_rect(hwnd)
             if rect:
                 left, top, right, bottom = rect
+                width, height = right - left, bottom - top
+                left, top, width, height = clamp_rect_to_workarea(
+                    hwnd, left, top, width, height
+                )
                 self._window_state = {
                     'x': left,
                     'y': top,
-                    'width': right - left,
-                    'height': bottom - top
+                    'width': width,
+                    'height': height
                 }
-                logger.debug(f"[保存窗口位置] 成功: {self._window_state}")
+                logger.debug(f"[保存窗口位置] 成功（已钳制进工作区）: {self._window_state}")
             else:
                 logger.warning("[保存窗口位置] 无法获取窗口矩形")
         except Exception as e:
@@ -1137,7 +1351,10 @@ class Api:
             
             user32.SetWindowPos(hwnd, None, x, y, width, height, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE)
             logger.debug(f"[拖动还原] 还原到: ({x}, {y}), 大小: {width}x{height}")
-            
+
+            # 还原后重新应用 frameless + WS_THICKFRAME，保证四角缩放可用
+            self._refresh_corner_resize(hwnd)
+
             self._is_maximized = False
             self._window_state = None
             
@@ -1153,12 +1370,97 @@ class Api:
             return {"success": False, "message": str(e)}
     
     def toggleFullscreen(self):
-        """切换全屏模式"""
-        if self._window:
-            self._window.toggle_fullscreen()
-            # 切换全屏状态
-            self._is_fullscreen = not self._is_fullscreen
-            logger.debug(f"[API] 全屏状态切换为: {self._is_fullscreen}")
+        """切换全屏模式
+
+        全屏与最大化的语义必须严格区分：
+          - 最大化：占满工作区（rcWork），**保留**任务栏
+          - 全屏：  占满整块显示器（rcMonitor），**覆盖**任务栏
+
+        为什么需要「全屏豁免」：pywebview 的 toggle_fullscreen() 内部实现是
+        `FormBorderStyle=None → Bounds=Screen.Bounds → WindowState=Maximized → SetWindowPos(整屏)`，
+        它本身就是走「最大化」这条路。而我们的窗口钩子为了让「最大化保留任务栏」，
+        会把 ptMaxSize 改写成工作区、并在 WM_SIZE(MAXIMIZED) 里把窗口钳回工作区。
+        结果全屏被钩子按普通最大化处理 —— 表现为「点全屏只是放大一点，任务栏还在」。
+
+        修复：进全屏前置豁免位（钩子整段跳过），退出后清掉并恢复
+        「最大化尊重工作区」的正常行为。
+        """
+        if not self._window:
+            return
+
+        entering = not self._is_fullscreen
+        hwnd = self._get_hwnd()
+
+        # 关键顺序：豁免位必须在 toggle_fullscreen() 之前设置，
+        # 否则 pywebview 内部那次 WindowState=Maximized 会先被钩子钳到工作区，
+        # 之后再 SetBounds(整屏) 虽然能放大，但 WindowState 已是最大化，
+        # 退出时状态还原会错乱。
+        try:
+            from backend.src.utils.window_bounds import set_fullscreen_override
+            set_fullscreen_override(hwnd, entering)
+        except Exception as exc:
+            logger.debug(f"[全屏] 设置豁免标志失败（忽略）: {exc}")
+
+        self._window.toggle_fullscreen()
+        self._is_fullscreen = not self._is_fullscreen
+        logger.debug(f"[API] 全屏状态切换为: {self._is_fullscreen}")
+
+        if self._is_fullscreen:
+            # 进入全屏：兜底把窗口铺满整块显示器。
+            #
+            # **关键顺序：必须先还原成普通窗口，再改尺寸。**
+            # 实测证据（同一台机器，同一窗口）：
+            #   [A] 最大化状态下 SetWindowPos(0,0,1920,1080)
+            #       → 实际仍是 1920x1032（被系统静默忽略）
+            #   [B] 先 SW_RESTORE 再 SetWindowPos(0,0,1920,1080)
+            #       → 实际 1920x1080，成功铺满整屏
+            # 最大化窗口的尺寸由 ptMaxSize 决定，不接受外部 resize。
+            # pywebview 的 toggle_fullscreen() 内部是先 Bounds 后 WindowState=Maximized，
+            # 我们的钩子即使因豁免位不再钳制，WindowState 仍是 Maximized，
+            # 后续 SetWindowPos 依然会被忽略 —— 全屏因此退化成最大化。
+            try:
+                import ctypes
+                from backend.src.utils.window_bounds import get_monitor_info
+
+                info = get_monitor_info(hwnd)
+                if info:
+                    ml, mt, mr, mb = info["monitor_rect"]
+                    user32 = ctypes.windll.user32
+                    # 先退出最大化，否则改尺寸无效
+                    if user32.IsZoomed(hwnd):
+                        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                        time.sleep(0.05)
+                    user32.SetWindowPos(
+                        hwnd, None, ml, mt, mr - ml, mb - mt,
+                        0x0004 | 0x0020,  # SWP_NOZORDER | SWP_FRAMECHANGED
+                    )
+                    logger.debug(f"[全屏] 已铺满整屏: ({ml},{mt}) {mr - ml}x{mb - mt}")
+            except Exception as exc:
+                logger.debug(f"[全屏] 整屏对齐失败（忽略）: {exc}")
+        else:
+            # 退出全屏：清豁免位，并复位 frameless 样式与四角缩放钩子。
+            # WinForms 在退出全屏时会把 FormBorderStyle 设回 old_style，
+            # 这会清掉 WS_THICKFRAME，导致四角缩放失效。
+            try:
+                from backend.src.utils.window_bounds import set_fullscreen_override
+                set_fullscreen_override(hwnd, False)
+            except Exception:
+                pass
+            self._refresh_corner_resize()
+
+            # 退出全屏后窗口仍占着整屏（覆盖任务栏），需要还原。
+            # 若此时窗口处于最大化状态，SW_RESTORE 会让它回到「最大化前的尺寸」，
+            # 也就是进全屏前的普通窗口——这正好是用户期望的结果。
+            # 若不在最大化（极少见），则按保存的矩形还原并钳制回工作区。
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                if user32.IsZoomed(hwnd):
+                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                else:
+                    self._restore_window_rect_clamped(hwnd)
+            except Exception:
+                self._restore_window_rect_clamped(hwnd)
     
     def fullscreenToMaximize(self):
         """
@@ -1198,12 +1500,23 @@ class Api:
                 work_area = monitor_info.rcWork
                 work_width = work_area.right - work_area.left
                 work_height = work_area.bottom - work_area.top
-                
+
+                # 退出全屏 → 转最大化，必须先清掉「全屏豁免」，
+                # 否则钩子仍然跳过 ptMaxSize 改写，窗口会继续盖住任务栏。
+                try:
+                    from backend.src.utils.window_bounds import set_fullscreen_override
+                    set_fullscreen_override(hwnd, False)
+                except Exception:
+                    pass
+
                 self._window.toggle_fullscreen()
                 self._is_fullscreen = False
                 
                 user32.SetWindowPos(hwnd, None, work_area.left, work_area.top, 
                                    work_width, work_height, 0x0004)
+
+                # 退出全屏后复位样式，确保四角缩放仍然可用
+                self._refresh_corner_resize(hwnd)
                 
                 self._is_maximized = True
                 logger.debug(f"[全屏转最大化] 完成，窗口大小: {work_width}x{work_height}")
@@ -1300,6 +1613,18 @@ class Api:
             import ctypes
             
             user32 = ctypes.windll.user32
+
+            # 拿到窗口句柄。下面需要它来判断/解除最大化状态，
+            # 并把「位置 + 尺寸」一次性交给 SetWindowPos。
+            hwnd = None
+            try:
+                if self._window is not None:
+                    gui = getattr(self._window, 'gui', None)
+                    hwnd = getattr(gui, 'hwnd', None) if gui else None
+            except Exception:
+                hwnd = None
+            if not hwnd:
+                hwnd = user32.FindWindowW(None, "ComfyNexus")
             
             screen_width = user32.GetSystemMetrics(0)
             screen_height = user32.GetSystemMetrics(1)
@@ -1325,10 +1650,93 @@ class Api:
             logger.debug(f"[resizeWindow] 请求窗口大小: {width}x{height} (逻辑)")
             logger.debug(f"[resizeWindow] 调整后窗口大小: {logical_width}x{logical_height} (逻辑)")
             logger.debug(f"[resizeWindow] 窗口位置: ({logical_x}, {logical_y}) (逻辑)")
-            
-            self._window.resize(logical_width, logical_height)
-            self._window.move(logical_x, logical_y)
-            
+
+            # 关键：最大化/全屏状态下，SetWindowPos 改尺寸会被系统直接忽略
+            # （最大化窗口的尺寸由 ptMaxSize 决定，不接受外部 resize）。
+            # 这是「设置窗口大小后无效」的直接原因之一：
+            # 程序默认就是最大化启动的，用户一进设置页改尺寸，什么都没发生。
+            try:
+                from backend.src.utils.window_bounds import set_min_track_size
+                # 先把最小跟踪尺寸降到本次目标之下，
+                # 否则设成 1280x720 会被 1024x640 的下限之外的钩子约束抵消。
+                set_min_track_size(
+                    min(round(1024 * self._dpi_scale), physical_width),
+                    min(round(640 * self._dpi_scale), physical_height),
+                )
+            except Exception:
+                pass
+
+            if self._is_fullscreen:
+                try:
+                    self._window.toggle_fullscreen()
+                    self._is_fullscreen = False
+                    import time as _t
+                    _t.sleep(0.05)
+                except Exception:
+                    pass
+
+            if user32.IsZoomed(hwnd):
+                logger.debug("[resizeWindow] 当前为最大化，先还原再改尺寸")
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                import time as _t
+                _t.sleep(0.05)
+                self._is_maximized = False
+
+            # 用 SetWindowPos 一次完成「位置 + 尺寸」。
+            # 不用 pywebview 的 resize()+move()：那是两次独立调用，
+            # 中间会被钩子的最小尺寸约束插一脚，且在最大化刚还原的瞬间
+            # 窗口尺寸还没稳定，容易出现「只移动不改大小」。
+            #
+            # 关键：必须把位置钳制进工作区。
+            # 若只设尺寸、位置仍按「整屏居中」算，当高度接近屏幕高度时
+            # 顶边会落到 y=-48（任务栏高度）——窗口上两个角跑到屏幕外，
+            # 鼠标移不过去，用户感知就是「设完大小后拖角完全没反应」。
+            # 实测证据：还原后窗口矩形 (0,-48)-(1680,1032)，四角命中测试
+            # 在屏幕内取不到上两个角的点。
+            try:
+                from backend.src.utils.window_bounds import apply_window_rect
+                apply_window_rect(
+                    hwnd,
+                    round(logical_x * self._dpi_scale),
+                    round(logical_y * self._dpi_scale),
+                    adjusted_physical_width,
+                    adjusted_physical_height,
+                    clamp=True,
+                )
+                logger.debug("[resizeWindow] 已应用尺寸（位置已钳制进工作区）")
+            except Exception as _apply_err:
+                logger.debug(f"[resizeWindow] 钳制应用失败，回退原始 SetWindowPos: {_apply_err}")
+                SWP_NOZORDER = 0x0004
+                SWP_FRAMECHANGED = 0x0020
+                user32.SetWindowPos(
+                    hwnd, None,
+                    round(logical_x * self._dpi_scale),
+                    round(logical_y * self._dpi_scale),
+                    adjusted_physical_width,
+                    adjusted_physical_height,
+                    SWP_NOZORDER | SWP_FRAMECHANGED,
+                )
+
+            # 改完尺寸后把最小跟踪尺寸设为「默认下限与本次目标的较小值」。
+            # 不能简单地恢复成 1024x640：如果用户就是要一个更小的窗口，
+            # 恢复默认下限会立刻把窗口顶回去，表现为「设置无效」。
+            # 也不能把下限一直压在很小的值上：那样拖角时窗口能缩到几乎不可用。
+            # 取两者较小值，既尊重用户选择，又保留一个可用下限。
+            try:
+                from backend.src.utils.window_bounds import set_min_track_size
+                set_min_track_size(
+                    min(round(1024 * self._dpi_scale), adjusted_physical_width),
+                    min(round(640 * self._dpi_scale), adjusted_physical_height),
+                )
+            except Exception:
+                pass
+
+            # 改尺寸后重新确保钩子与样式在位。
+            # SetWindowPos 带 SWP_FRAMECHANGED 会让系统重算非客户区，
+            # 极端情况下 WinForms 会重建句柄 → 旧 hwnd 的子类化失效 →
+            # 四角缩放突然不响应。这里按当前有效 hwnd 幂等重装一次。
+            self._refresh_corner_resize()
+
             return True
         except Exception as e:
             logger.error(f"[resizeWindow] 调整窗口大小失败: {e}")
@@ -1339,6 +1747,168 @@ class Api:
                 logger.error(f"[resizeWindow] 降级方案也失败: {resize_error}")
                 return False
     
+    def isNativeResizeActive(self):
+        """查询是否应由「前端角部热区 + 后端原生缩放环」处理四角拖动
+
+        **重要语义修正（v1.3.0 修复）**
+
+        原实现返回「窗口级 WM_NCHITTEST 钩子是否已安装」，前端据此
+        **完全不渲染角部热区**。但实测证明这个前提是错的：
+
+            WindowFromPoint 打在窗口四角，返回的是
+            `Chrome_RenderWidgetHostHWND`（WebView2 的子窗口）
+
+        也就是说 WebView2 铺满了整个客户区，鼠标落在四角命中的是**子窗口**，
+        主窗口的 WndProc 根本不会被调用 —— 窗口级 WM_NCHITTEST 钩子在
+        真实鼠标操作下是**死代码**。于是前端不画热区 + 钩子不生效
+        = 四角完全拖不动。
+
+        修正后：始终返回 active=False，让前端**始终渲染**角部热区；
+        用户按下时由 startNativeResize 主动发 WM_NCLBUTTONDOWN，
+        把系统拉进真正的缩放缓动环。这条路不依赖命中测试的窗口归属，
+        绕过了 WebView2 子窗口的遮挡问题。
+
+        Returns:
+            dict: {"success": bool, "active": bool}  —— active 恒为 False
+        """
+        return {"success": True, "active": False}
+
+    def startNativeResize(self, corner):
+        """开始四角拖动缩放（轮询光标实现）
+
+        **为什么这里不再用 WM_NCLBUTTONDOWN + 系统模态环**（实测推翻的旧方案）：
+
+        旧实现发 `WM_NCLBUTTONDOWN(HTTOPLEFT)`，想让 Windows 自己进缩放缓动环。
+        实测结论：
+          - 模态环**确实进入了**（SendMessage 阻塞到鼠标松开，3s 超时才返回）；
+          - 但窗口尺寸**完全不动**。
+        根因：WebView2 是铺满客户区的子窗口，用户按下鼠标时**捕获归它**。
+        模态环需要收到 WM_MOUSEMOVE 才能算新尺寸，而那些消息全被子窗口吃掉。
+        后端工作线程调 `ReleaseCapture()` 也没用 —— 它只能释放**调用线程**的捕获。
+
+        对照实验证据（同一窗口）：
+          - 系统级注入 mouse_event 拖拽 → 尺寸变化（1920x1034）；
+          - 直接向主窗口 PostMessage(WM_MOUSEMOVE) → 尺寸变化（1024x640）。
+        即模态环本身正常，是"鼠标消息到不了主窗口"。
+
+        所以改用**轮询 GetCursorPos + SetWindowPos**：
+        GetCursorPos / GetAsyncKeyState 都是全局的，不受捕获归属影响，
+        任何线程都能正确读到，从根本上绕开 WebView2 的干扰。
+
+        Args:
+            corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+        Returns:
+            dict: {"success": bool, "message": str}
+        """
+        if not self._window:
+            return {"success": False, "message": "窗口对象不存在"}
+
+        if corner not in ("top-left", "top-right", "bottom-left", "bottom-right"):
+            return {"success": False, "message": f"无效的角: {corner}"}
+
+        if self._is_fullscreen:
+            return {"success": False, "message": "全屏状态下不支持缩放"}
+
+        try:
+            import ctypes
+            from backend.src.utils.window_bounds import start_polling_resize
+
+            user32 = ctypes.windll.user32
+            hwnd = self._get_hwnd()
+            if not hwnd:
+                return {"success": False, "message": "无法获取窗口句柄"}
+
+            # 最大化状态下不允许缩放，先还原成普通窗口。
+            # 注意：这里必须同时把内部标志改回 False，否则前端 isMaximized()
+            # 仍返回 True，ResizeHandles 会 return null 把热区整个隐藏掉，
+            # 用户感知就是"点角毫无反应"。
+            if user32.IsZoomed(hwnd):
+                try:
+                    self.maximizeApp()
+                except Exception:
+                    pass
+                self._is_maximized = False
+                time.sleep(0.08)
+
+            min_w = round(1024 * self._dpi_scale)
+            min_h = round(640 * self._dpi_scale)
+
+            started = start_polling_resize(
+                hwnd,
+                corner,
+                min_width=min_w,
+                min_height=min_h,
+                on_finish=self._on_resize_finished,
+            )
+            if not started:
+                return {"success": False, "message": "已有缩放在进行中"}
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"[startNativeResize] 启动缩放失败: {e}", exc_info=True)
+            return {"success": False, "message": str(e)}
+
+    def _on_resize_finished(self, rect):
+        """缩放结束回调：把最终尺寸写回设置，供下次启动复用。
+
+        rect 是物理像素 (left, top, width, height)，写回设置时换算成逻辑像素，
+        与前端 windowSize 的语义保持一致。
+        """
+        try:
+            _left, _top, width, height = rect
+            scale = self._dpi_scale or 1.0
+            logical_w = round(width / scale)
+            logical_h = round(height / scale)
+            final_rect = {
+                "x": _left, "y": _top,
+                "width": width, "height": height,
+            }
+            logger.debug(
+                f"[startNativeResize] 缩放完成 {logical_w}x{logical_h} (逻辑)"
+            )
+            # 方法名必须是 `update_settings`（前端暴露为 updateSettings）。
+            # 曾误写成 updateSystemSettings —— 后端根本没有这个方法，
+            # 调用抛 AttributeError 被下面的 except 静默吞掉，
+            # 表现为「拖动缩放能用，但下次启动尺寸回退」。实测才发现的。
+            try:
+                self.update_settings(
+                    {"appearance": {"windowSize": f"{logical_w}x{logical_h}"}}
+                )
+                logger.info(
+                    f"[startNativeResize] 尺寸已保存 {logical_w}x{logical_h}"
+                )
+            except Exception as exc:
+                # 保存失败不影响本次缩放，但要留日志，别再静默
+                logger.warning(f"[startNativeResize] 保存尺寸失败: {exc}")
+
+            # **必须在 update_settings 之后再写 _window_state**。
+            # update_settings 内部有个副作用：检测到 windowSize 变化就把
+            # _window_state 置 None（见 update_settings 里"重置最大化状态"那段）。
+            # 若先写 _window_state 再调 update_settings，位置信息会被清掉，
+            # 之后从最大化还原时只能用默认的 (100,100)，窗口会跳到左上角。
+            self._window_state = final_rect
+            # 缩放结束时窗口一定不是最大化状态
+            self._is_maximized = False
+        except Exception as exc:
+            logger.warning(f"[startNativeResize] 缩放回调异常: {exc}")
+
+    def stopNativeResize(self):
+        """结束四角拖动缩放（前端 mouseup / mouseleave 调用）
+
+        为什么需要这个显式结束信号：轮询线程原本靠 `GetAsyncKeyState(VK_LBUTTON)`
+        判断松手，但它读的是**物理按键**状态。实测发现触摸板轻点、远程输入、
+        以及自动化派发的合成事件下，物理键读数恒为"已松开"，
+        轮询会第 0 帧就退出（日志实证：`左键已松开，结束（0 帧）`）。
+        改为前端主动通知，不依赖物理键状态。
+        """
+        try:
+            from backend.src.utils.window_bounds import stop_polling_resize
+            stopped = stop_polling_resize()
+            return {"success": True, "stopped": stopped}
+        except Exception as exc:
+            logger.debug(f"[stopNativeResize] 失败（忽略）: {exc}")
+            return {"success": False, "message": str(exc)}
+
     def resizeWindowWithPosition(self, width, height, x, y):
         """改变窗口大小并移动到指定位置（用于拖动调整窗口大小）
         
@@ -3543,16 +4113,20 @@ class Api:
                 new_level = updates['logging']['level']
                 self._apply_log_level(new_level)
             
-            # 如果更新了窗口大小，重置最大化状态
+            # 如果更新了窗口大小，清除缓存的窗口位置
+            #
+            # 注意：**这里不能改 _is_maximized**（原实现会顺手置 False，是个 bug）。
+            # 理由：_is_maximized 必须忠实反映窗口真实状态，它的唯一作用是让
+            # maximizeApp() 判断"该最大化还是该还原"、以及让前端决定是否画
+            # 四角热区。若在用户于设置页选尺寸时把它强置 False，而窗口其实
+            # 还最大化着，就会出现：
+            #   - 前端以为不是最大化 → 画出四角热区（但最大化时不该能拖）；
+            #   - 用户点最大化按钮 → 走"最大化"分支，窗口不动，像卡死。
+            # 真正的状态同步交给 IsZoomed() 查询与各处显式赋值。
             if 'appearance' in updates:
                 if 'windowSize' in updates['appearance']:
-                    logger.debug("[API] 检测到窗口大小更新，重置最大化状态")
-                    # 清除保存的窗口状态
+                    logger.debug("[API] 检测到窗口大小更新，清除缓存的窗口位置")
                     self._window_state = None
-                    # 如果当前是最大化状态，标记为非最大化
-                    # （下次拖动还原时会使用新的配置大小）
-                    if self._is_maximized:
-                        self._is_maximized = False
         
         return result
     
@@ -3979,14 +4553,22 @@ class Api:
             logger.warning(f"[API] 解析更新源失败，使用默认仓库: {e}")
         return default
 
-    def get_github_releases(self, owner: str = None, repo: str = None, per_page: int = 3):
+    def get_github_releases(self, owner: str = None, repo: str = None, per_page: int = 100):
         """
         获取 GitHub 仓库的 Releases 列表（通过镜像代理）
 
         Args:
             owner: 仓库所有者（None 时自动跟随更新源，见 dev 文件机制）
             repo: 仓库名称
-            per_page: 每页数量
+            per_page: 每页数量。
+
+                **默认 100（GitHub 单页上限），不再用 3。**
+
+                原先是 3，目的是「只取最近几个版本展示」。但更新日志弹窗需要
+                完整的历史版本列表（原仓库从 v1.2.6 一直排到 RC，共 31 个），
+                只取 3 条会让「历史版本」整段缺失 —— 用户反馈的
+                「原仓库从第一个版本到 1.2.6 的所有历史更新记录都没显示」
+                就是这个默认值造成的。
 
         Returns:
             dict: {

@@ -68,8 +68,12 @@ export function MainLayout() {
   const shouldShowTitleBar = !isFullscreen || showTitleBarInFullscreen
 
   return (
-    <div className="flex h-screen bg-background">
-      {/* 窗口大小调整手柄 */}
+    // absolute inset-0 而不是 h-screen w-screen：
+    // 100vh/100vw 在窗口缩放过程中更新滞后，且不排除任何边距，
+    // 窗口变小时内容会短暂（甚至持续）溢出到窗口外。
+    // 用 inset-0 跟随父容器（#root = 100% 视口）可以做到逐帧同步。
+    <div className="absolute inset-0 flex overflow-hidden bg-background">
+      {/* 窗口大小调整手柄（仅钩子未接管时的兜底） */}
       <ResizeHandles />
       
       {/* 全屏时的顶部触发区域 - 用于捕获鼠标移动（覆盖在 iframe 之上） */}
@@ -86,8 +90,11 @@ export function MainLayout() {
       {/* 侧边栏 - 全屏时隐藏，独立延伸到顶部 */}
       {!isFullscreen && <SideBar />}
 
-      {/* 右侧区域：标题栏 + 内容 */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      {/* 右侧区域：标题栏 + 内容。
+          min-w-0 是关键：flex 子项默认 min-width:auto（= 内容宽度），
+          窗口缩小时它不肯收窄，于是整个右侧内容溢出到窗口外，
+          看起来就是「内容不随窗口重排、四周显示不全」。*/}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* 自定义标题栏 - 只在右侧区域 */}
         <div
           className={`
@@ -110,7 +117,7 @@ export function MainLayout() {
         </div>
 
         {/* 页面内容 */}
-        <main className="relative flex-1 overflow-y-auto overflow-x-hidden bg-background">
+        <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
           {/* 全局 WorkspaceFrame - ComfyUI 可用时始终存在，通过 CSS 控制显示 */}
           {/* 使用 visibility 而非 display，避免 iframe 隐藏时尺寸变为 0 导致 LiteGraph 节点位置错乱 */}
           {comfyUIUrl && (

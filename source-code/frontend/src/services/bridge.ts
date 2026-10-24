@@ -253,6 +253,9 @@ class BridgeService implements EnvironmentAPI {
 
   /**
    * Resize window with position (for drag resize from corners)
+   *
+   * @deprecated v1.3.0 起四角缩放改走 startNativeResize（系统原生缩放缓动环）。
+   * 保留此方法仅为兼容旧调用点，逐帧调用它会导致「窗口平移但尺寸不变」。
    */
   async resizeWindowWithPosition(width: number, height: number, x: number, y: number) {
     if (isDevelopment()) {
@@ -260,6 +263,50 @@ class BridgeService implements EnvironmentAPI {
       return true;
     }
     return this.callApi<boolean>('resizeWindowWithPosition', width, height, x, y);
+  }
+
+  /**
+   * 查询窗口是否已启用「系统原生四角缩放」
+   *
+   * true 时 Windows 自己处理四角缩放与光标形状，前端无需再渲染热区。
+   */
+  async isNativeResizeActive(): Promise<{ success: boolean; active: boolean }> {
+    if (isDevelopment()) {
+      return { success: true, active: false };
+    }
+    return this.callApi<{ success: boolean; active: boolean }>('isNativeResizeActive');
+  }
+
+  /**
+   * 开始四角拖动缩放
+   *
+   * 后端用**轮询 GetCursorPos + SetWindowPos** 实现，而不是让系统进
+   * WM_NCLBUTTONDOWN 模态环 —— 后者在 WebView2 下不可用：WebView2 是铺满
+   * 客户区的子窗口，按下鼠标时捕获归它，模态环收不到 WM_MOUSEMOVE，
+   * 窗口尺寸永远不变（实测 `SendMessage` 阻塞 3s 但尺寸不动）。
+   *
+   * GetCursorPos / GetAsyncKeyState 是全局的，不受捕获归属影响。
+   */
+  async startNativeResize(corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right') {
+    if (isDevelopment()) {
+      console.log('[BridgeService] 开发环境模拟启动缩放:', corner);
+      return { success: true };
+    }
+    return this.callApi<{ success: boolean; message?: string }>('startNativeResize', corner);
+  }
+
+  /**
+   * 结束四角拖动缩放（mouseup / 窗口失焦时调用）
+   *
+   * 必须显式通知：后端原本靠 GetAsyncKeyState(VK_LBUTTON) 判断松手，
+   * 但触摸板轻点、远程输入、合成事件下物理键读数恒为"已松开"，
+   * 会导致轮询第 0 帧就退出。
+   */
+  async stopNativeResize() {
+    if (isDevelopment()) {
+      return { success: true, stopped: false };
+    }
+    return this.callApi<{ success: boolean; stopped?: boolean }>('stopNativeResize');
   }
 
   /**

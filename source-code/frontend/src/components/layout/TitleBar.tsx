@@ -610,18 +610,21 @@ export function TitleBar() {
   return (
     <>
       <div 
-        className="relative z-10 flex select-none items-center justify-end border-b border-border bg-card px-2"
+        className="relative z-10 flex select-none items-center justify-end gap-1 overflow-hidden border-b border-border bg-card px-2 py-0.5"
         style={{ height: `${titleBarHeight}px` }}
       >
-        {/* 左侧：窗口拖动区域 */}
+        {/* 左侧：窗口拖动区域。
+            min-w-0 + flex-1：窗口变窄时由这里先被压缩，
+            保证右侧控制按钮永远不会被挤出可视区（原先没有 min-w-0，
+            flex 项最小尺寸取内容宽度，窄窗口下按钮组被顶到屏幕外）。*/}
         <div 
-          className={cn("h-full flex-1", (isFullscreen || isMaximized) ? "pywebview-no-drag" : "pywebview-drag-region")}
+          className={cn("h-full min-w-0 flex-1", (isFullscreen || isMaximized) ? "pywebview-no-drag" : "pywebview-drag-region")}
           onMouseDown={isMaximized ? handleDragRegionMouseDown : undefined}
           onDoubleClick={handleTitleBarDoubleClick}
         />
         
-        {/* 环境列表区域 */}
-        <div className="pywebview-no-drag flex items-center gap-1">
+        {/* 环境列表区域：可收缩，超出部分在容器内滚动而不是撑破标题栏 */}
+        <div className="pywebview-no-drag titlebar-env-list flex min-w-0 shrink items-center gap-1">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -692,14 +695,15 @@ export function TitleBar() {
         
         {/* 中间：窗口拖动区域 */}
         <div 
-          className={cn((isFullscreen || isMaximized) ? "pywebview-no-drag" : "pywebview-drag-region")} 
+          className={cn("shrink-0", (isFullscreen || isMaximized) ? "pywebview-no-drag" : "pywebview-drag-region")} 
           style={{ width: '8px', height: '100%' }}
           onMouseDown={isMaximized ? handleDragRegionMouseDown : undefined}
           onDoubleClick={handleTitleBarDoubleClick}
         />
         
-        {/* 右侧：控制按钮区域 */}
-        <div className="pywebview-no-drag flex items-center gap-1">
+        {/* 右侧：控制按钮区域。shrink-0 保证窗口再窄也完整可见
+            （最小化/最大化/全屏/关闭 四个按钮永不被压缩或裁掉）。*/}
+        <div className="pywebview-no-drag flex shrink-0 items-center gap-0.5">
           {/* 重启按钮 */}
           <Button
             onClick={handleRestartComfyUI}

@@ -26,7 +26,12 @@ export function ChangelogSection({ className }: ChangelogSectionProps) {
     setIsLoading(true)
     setError(null)
     try {
-      const data = await fetchReleases()
+      // 本地 version.json 立刻出结果；远端在后台补增量，到了再刷新。
+      // 不能先等远端：api.github.com 不可达时后端要等 15s 超时，
+      // 用户会以为「更新日志没了」（本轮实测的真实问题）。
+      const data = await fetchReleases((incremental) => {
+        setReleases(incremental)
+      })
       setReleases(data)
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Unknown error'))

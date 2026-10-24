@@ -1,20 +1,30 @@
-; ComfyNexus v1.3.0 安装包脚本（Inno Setup 6）
+; ComfyNexus v1.3.1 安装包脚本（Inno Setup 7）
 ; 用法: ISCC.exe build_installer.iss
 ; 输入: dist\ComfyNexus\（PyInstaller COLLECT 产物）
-; 输出: 发布包\ComfyNexus-v1.3.0-setup.exe
+; 输出: 发布包\ComfyNexus-v1.3.1-setup.exe
 
 #define MyAppName "ComfyNexus"
-#define MyAppVersion "1.3.0"
+#define MyAppVersion "1.3.1"
 #define MyAppPublisher "ComfyNexus"
 #define MyAppExeName "ComfyNexus.exe"
 
 [Setup]
-AppId={{8C1B5E4A-6D2F-4E7B-9A3C-COMFYNEXUS130}
+; AppId 必须是合法 GUID（8-4-4-4-12 位十六进制），否则编译直接报错。
+; 这个值决定「同系列安装包互相覆盖升级」的身份，一经发布不要再改。
+AppId={{A3E32D21-88B2-4C95-8734-826864298CE1}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} v{#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\{#MyAppName}
+; 默认安装到 D:\Program\ComfyNexus\（目录不存在时安装器会自动逐级创建）
+; 用户在「选择目标位置」页可直接输入路径，或点「浏览…」弹窗选择文件夹
+DefaultDirName=D:\Program\ComfyNexus
+; 一律使用上面的默认路径，不再继承历史安装目录，避免旧版本残留路径覆盖默认值
+UsePreviousAppDir=no
+; 必须显示「选择目标位置」页，允许用户自定义安装目录
+DisableDirPage=no
+; 目标目录已存在且非空时给出提示（不阻止安装）
+DirExistsWarning=auto
 DefaultGroupName={#MyAppName}
 ; 应用本身需要管理员权限（硬件监控），安装器保持一致
 PrivilegesRequired=admin

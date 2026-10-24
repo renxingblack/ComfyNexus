@@ -51,6 +51,23 @@ export function ThemeProvider({ children, defaultTheme = 'light' }: ThemeProvide
     }
   }, [])
 
+  /**
+   * 带过渡地应用主题
+   *
+   * 全局 `* { transition: ... }` 已移除（它是窗口缩放卡死的根因）。
+   * 为了让「切换主题」这个**低频动作**仍然平滑，这里在切换瞬间挂上
+   * `.theme-transition`，过渡结束后立即摘掉——动画窗口期只有 320ms，
+   * 不会影响窗口缩放（缩放发生在没有该类的常态下）。
+   */
+  const applyThemeWithTransition = useCallback((newTheme: Theme) => {
+    const root = document.documentElement
+    root.classList.add('theme-transition')
+    applyTheme(newTheme)
+    window.setTimeout(() => {
+      root.classList.remove('theme-transition')
+    }, 320)
+  }, [applyTheme])
+
   // 保存主题到后端（仅在 pywebview 环境中）
   const saveThemeToBackend = useCallback(async (newTheme: Theme) => {
     if (!isPyWebView()) return
@@ -123,20 +140,20 @@ export function ThemeProvider({ children, defaultTheme = 'light' }: ThemeProvide
   const toggleTheme = useCallback(() => {
     const newTheme: Theme = theme === 'light' ? 'dark' : 'light'
     setThemeState(newTheme)
-    applyTheme(newTheme)
+    applyThemeWithTransition(newTheme)
     localStorage.setItem('theme-preference', newTheme)
     saveThemeToBackend(newTheme)
     console.log('[ThemeProvider] 主题已切换:', newTheme)
-  }, [theme, applyTheme, saveThemeToBackend])
+  }, [theme, applyThemeWithTransition, saveThemeToBackend])
 
   // 设置指定主题
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme)
-    applyTheme(newTheme)
+    applyThemeWithTransition(newTheme)
     localStorage.setItem('theme-preference', newTheme)
     saveThemeToBackend(newTheme)
     console.log('[ThemeProvider] 主题已设置:', newTheme)
-  }, [applyTheme, saveThemeToBackend])
+  }, [applyThemeWithTransition, saveThemeToBackend])
 
   // 防止闪烁 - 只在挂载后渲染
   if (!mounted) {

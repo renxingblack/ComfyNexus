@@ -860,27 +860,58 @@ def main():
         logger.debug(f"配置的窗口尺寸: {default_width}x{default_height}")
         
         api.set_dpi_scale(dpi_scale)
-        
-        # 确保窗口不会超出屏幕范围（留出边距）
-        max_width = round(screen_width * 0.95)  # 最大宽度为屏幕的 95%
-        max_height = round(screen_height * 0.95)  # 最大高度为屏幕的 95%
-        
-        # 如果窗口尺寸超出屏幕，自动调整
+
+        # 取主显示器「工作区」（排除任务栏），而不是整块屏幕。
+        #
+        # 为什么必须用工作区：用户把窗口设成 1680x1080，而 1080p 屏幕有 48px 任务栏，
+        # 工作区只有 1920x1032。若按屏幕全高（1080）来算上限和居中，
+        # 窗口顶边会落到 y=-48 —— 上边两个角直接跑到屏幕外，
+        # 鼠标移不过去，用户感知就是「拖角完全没反应」。
+        # 实测证据：还原后窗口矩形 (0,-48)-(1680,1032)，上两角永远点不到。
+        try:
+            import ctypes.wintypes as _wt
+            work_rect = _wt.RECT()
+            SPI_GETWORKAREA = 0x0030
+            if user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(work_rect), 0):
+                work_left, work_top = work_rect.left, work_rect.top
+                work_width = work_rect.right - work_rect.left
+                work_height = work_rect.bottom - work_rect.top
+                logger.info(
+                    f"[窗口创建] 主显示器工作区: ({work_left},{work_top}) "
+                    f"{work_width}x{work_height}"
+                )
+            else:
+                raise OSError("SystemParametersInfoW 失败")
+        except Exception as _wa:
+            logger.debug(f"[窗口创建] 取工作区失败，退回整屏: {_wa}")
+            work_left, work_top = 0, 0
+            work_width, work_height = screen_width, screen_height
+
+        # 尺寸上限取工作区本身（不再乘 0.95）：
+        # 乘系数会让「1920x1080」永远落不到用户想要的实际大小，
+        # 而工作区本身已经是安全边界。
+        max_width = work_width
+        max_height = work_height
+
+        # 如果窗口尺寸超出工作区，自动调整
         adjusted_width = min(default_width, max_width)
         adjusted_height = min(default_height, max_height)
-        
+
         if adjusted_width != default_width or adjusted_height != default_height:
-            safe_print(f"[警告]  窗口尺寸超出屏幕范围，已自动调整:")
+            safe_print(f"[警告]  窗口尺寸超出可用工作区，已自动调整:")
             safe_print(f"   原始尺寸: {default_width}x{default_height}")
             safe_print(f"   调整后: {adjusted_width}x{adjusted_height}")
-            safe_print(f"   屏幕尺寸: {screen_width}x{screen_height}")
+            safe_print(f"   工作区尺寸: {work_width}x{work_height}（已排除任务栏）")
             logger.info(f"窗口尺寸已调整: {default_width}x{default_height} -> {adjusted_width}x{adjusted_height}")
             default_width = adjusted_width
             default_height = adjusted_height
-        
-        # 计算居中位置（使用物理像素）
-        x = max(0, (screen_width - default_width) // 2)
-        y = max(0, (screen_height - default_height) // 2)
+
+        # 在工作区内居中（物理像素）
+        x = work_left + max(0, (work_width - default_width) // 2)
+        y = work_top + max(0, (work_height - default_height) // 2)
+        # 兜底：居中后仍需保证不越过工作区边界
+        x = max(work_left, min(x, work_left + work_width - default_width))
+        y = max(work_top, min(y, work_top + work_height - default_height))
         
         # 注意：pywebview 在 DPI 感知模式下可能使用逻辑像素
         # 需要将物理像素转换为逻辑像素
@@ -1129,6 +1160,12 @@ def main():
     # 关键设置：在调试模式下禁止自动打开开发者工具
     # 这样可以保留 F12 和右键检查，但不会自动弹出开发者工具
     webview.settings['OPEN_DEVTOOLS_IN_DEBUG'] = False
+
+    # 说明：可选 WebView2 远程调试端口（CDP）的开关放在
+    # `backend/src/bridge/api.py` 的模块级代码里。
+    # 原因：main.py 是 PyInstaller 的入口脚本（__main__），打包后
+    # 只存在于 PYZ 字节码中，不像 backend.* 那样能通过 _BackendDiskFinder
+    # 从磁盘热部署。放这里会导致「改了没反应」。
     
     # 定义窗口状态重置函数
     def reset_window_state():
@@ -1166,27 +1203,22 @@ def main():
                     break
             
             if hwnd and hwnd != 0:
-                # 安装「最大化约束到工作区」钩子：frameless(WS_POPUP) 窗口
-                # 直接 SW_MAXIMIZE 会覆盖任务栏，钩子把最大化矩形改写为工作区。
+                # 安装「最大化约束到工作区 + 四角原生缩放 + 最小尺寸」窗口钩子：
+                # - frameless(WS_POPUP) 窗口直接 SW_MAXIMIZE 会覆盖任务栏，钩子把
+                #   最大化矩形改写为工作区；
+                # - 四角缩放由钩子的 WM_NCHITTEST 只对四个角返回缩放命中码实现，
+                #   拖动由 Windows 在 UI 线程内同步完成，不再逐帧跨桥调用前端 API
+                #   （避免「窗口平移但尺寸不变」和拖动卡死）。
                 try:
                     from backend.src.utils.window_bounds import install_maximize_workarea_hook
-                    install_maximize_workarea_hook(hwnd)
+                    install_maximize_workarea_hook(
+                        hwnd,
+                        min_width=round(1024 * dpi_scale),
+                        min_height=round(640 * dpi_scale),
+                    )
                 except Exception as _hook_err:
-                    logger.debug(f"[窗口重置] 安装工作区钩子失败（忽略）: {_hook_err}")
+                    logger.debug(f"[窗口重置] 安装窗口钩子失败（忽略）: {_hook_err}")
 
-                GWL_STYLE = -16
-                WS_POPUP = 0x80000000
-                WS_CAPTION = 0x00C00000
-                WS_THICKFRAME = 0x00040000
-                WS_SYSMENU = 0x00080000
-                WS_MINIMIZEBOX = 0x00020000
-                WS_MAXIMIZEBOX = 0x00010000
-                SWP_FRAMECHANGED = 0x0020
-                SWP_NOZORDER = 0x0004
-                SWP_NOMOVE = 0x0002
-                SWP_NOSIZE = 0x0001
-                SWP_SHOWWINDOW = 0x0040
-                
                 # 步骤1：检查窗口是否被 Windows 自动最大化
                 is_maximized = bool(user32.IsZoomed(hwnd))
                 logger.debug(f"[窗口重置] 窗口最大化状态: {is_maximized}")
@@ -1197,19 +1229,22 @@ def main():
                     user32.ShowWindow(hwnd, 9)
                     time.sleep(0.05)
                 
-                # 步骤2：强制设置 frameless 窗口样式
-                # 移除所有标题栏相关样式，确保 WS_POPUP 被设置，添加 WS_MINIMIZEBOX
-                current_style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-                remove_mask = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX
-                target_style = (current_style & ~remove_mask) | WS_POPUP | WS_MINIMIZEBOX
-                user32.SetWindowLongW(hwnd, GWL_STYLE, target_style)
-                logger.debug(f"[窗口重置] 窗口样式: 0x{current_style:08X} -> 0x{target_style:08X}")
-                
-                # 步骤3：强制刷新窗口框架（关键！缺少此步骤会导致标题栏残留）
-                user32.SetWindowPos(
-                    hwnd, None, 0, 0, 0, 0,
-                    SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE
-                )
+                # 步骤2：强制设置 frameless 窗口样式（复用 window_bounds 里的统一实现）
+                # 移除标题栏相关样式（WS_CAPTION / WS_SYSMENU / WS_MAXIMIZEBOX），
+                # 但**必须保留 WS_THICKFRAME**：
+                # 原生缩放（WM_NCHITTEST 返回 HT* 命中码后由系统进入缩放缓动环）
+                # 依赖 WS_THICKFRAME 位，缺了它系统会直接忽略 SC_SIZE，
+                # 表现为「拖角没反应」或「只有窗口在动、尺寸不变」。
+                # 加回 WS_THICKFRAME 带来的非客户区边框由钩子的 WM_NCCALCSIZE
+                # 返回 0 消掉（客户区 = 整个窗口矩形），因此不出现可视边框。
+                # 步骤2+3 一起由 ensure_frameless_style 完成（含 SWP_FRAMECHANGED 刷新）。
+                # 之所以抽成公共函数：全屏进出 / 最大化还原后也要重复这套复位，
+                # 两处各写一遍容易漂移，导致「某种状态下四角缩放突然失效」。
+                try:
+                    from backend.src.utils.window_bounds import ensure_frameless_style
+                    ensure_frameless_style(hwnd, refresh_frame=True)
+                except Exception as _style_err:
+                    logger.warning(f"[窗口重置] 应用 frameless 样式失败: {_style_err}")
                 
                 # 步骤4：最终统一最大化到工作区（覆盖任务栏）。
                 # 钩子已在函数开头安装，ShowWindow(SW_MAXIMIZE=3) 会被改写为工作区矩形，
@@ -1264,18 +1299,26 @@ def main():
     
     def on_webview_ready():
         """webview 启动后创建悬浮窗（仅当配置开启时）并启动健康检查"""
-        # 确保「最大化约束到工作区」钩子已安装（frameless WS_POPUP 窗口直接
-        # maximize 会覆盖任务栏；钩子把最大化矩形改写为工作区，保留任务栏）。
+        # 确保窗口钩子已安装（最大化约束到工作区 + 四角原生缩放 + 最小尺寸）。
+        # frameless WS_POPUP 窗口直接 maximize 会覆盖任务栏；钩子把最大化矩形
+        # 改写为工作区；同时 WM_NCHITTEST 只对四角返回缩放命中码。
+        # 这里用 refresh_corner_resize：既装钩子，也再刷一次 frameless 样式——
+        # 因为 create_window / maximize 过程中 Windows 可能重算样式并丢掉
+        # WS_THICKFRAME，导致四角缩放静默失效。
         try:
-            from backend.src.utils.window_bounds import install_maximize_workarea_hook
+            from backend.src.utils.window_bounds import refresh_corner_resize
             _hwnd = getattr(window, 'gui', None)
             _hwnd = getattr(_hwnd, 'hwnd', None) if _hwnd else None
             if not _hwnd:
                 import ctypes
                 _hwnd = ctypes.windll.user32.FindWindowW(None, "ComfyNexus")
-            install_maximize_workarea_hook(_hwnd)
+            refresh_corner_resize(
+                _hwnd,
+                min_width=round(1024 * dpi_scale),
+                min_height=round(640 * dpi_scale),
+            )
         except Exception as _hook_err:
-            logger.debug(f"[on_webview_ready] 安装工作区钩子失败（忽略）: {_hook_err}")
+            logger.debug(f"[on_webview_ready] 刷新窗口样式/钩子失败（忽略）: {_hook_err}")
 
         # 窗口显示后强制最大化（frameless 下 create_window 的 maximized 参数不可靠）
         try:

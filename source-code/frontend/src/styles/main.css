@@ -152,9 +152,15 @@
 }
 
 @layer base {
+  /*
+   * 注意：这里原本是 `* { transition: background-color/color/border-color 0.3s }`。
+   * 通配符选择器 + 三个属性过渡，意味着窗口缩放的每一帧都会对页面上每个节点
+   * 重新计算过渡（几千个元素 × 3 个属性）。拖动缩放窗口时这就是卡死的直接原因。
+   * 主题切换的平滑过渡改由 `.theme-transition` 类按需开启（见 ThemeContext），
+   * 既保留切主题的观感，又不再拖累窗口缩放。
+   */
   * {
     @apply border-border;
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
   }
 
   img, video, canvas, svg {
@@ -176,10 +182,46 @@
   
   #root {
     @apply w-full h-full;
+    /* 缩窗口时被压缩的是「可伸缩区」，不允许出现横向滚动条 */
+    min-width: 0;
+    min-height: 0;
   }
 
+  /*
+   * 注意：这里**故意不加** html { transition: all }。
+   * 原来的 `html { transition: all 0.3s ease-in-out }` 会在窗口缩放时
+   * 对全站每个元素重算一次过渡动画，拖拽过程中每帧都触发，
+   * 上千个节点叠加后直接把 UI 线程压死（表现是拖动卡住、界面假死）。
+   * 窗口尺寸变化必须是无过渡的即时响应。
+   */
   html {
-    transition: all 0.3s ease-in-out;
+    transition: none;
+  }
+
+  /*
+   * 主题切换专用过渡（由 ThemeContext 在切换瞬间挂到 <html> 上，320ms 后摘除）。
+   * 只在「切主题」这个低频动作里生效，绝不参与窗口缩放。
+   */
+  .theme-transition,
+  .theme-transition *:not(img):not(video):not(canvas):not(svg) {
+    transition: background-color 0.28s ease, color 0.28s ease, border-color 0.28s ease !important;
+  }
+
+  /*
+   * 标题栏环境按钮列表：窗口变窄时横向滚动，且隐藏滚动条。
+   * 不用 overflow-x-auto 的默认滚动条——标题栏只有 40px 高，
+   * 滚动条会把按钮压扁；也不让它撑破标题栏把右侧控制按钮挤出可视区。
+   */
+  .titlebar-env-list {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .titlebar-env-list::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
   
   .select-text,
@@ -762,4 +804,41 @@
 
 .dark .react-flow__controls-button svg {
   fill: hsl(var(--text-primary));
+}
+
+/* ==========================================================================
+   更新日志：原作者历史段落
+   
+   原作者每个 Release 正文自带 `# ComfyNexus vX.Y.Z 更新日志` 这类一级标题，
+   我们按要求「一字不改」地保留下来，于是整段历史里会出现多个 H1。
+   默认 H1 样式（text-2xl + 大上边距）在这里会过于抢眼、把层级拉散，
+   所以仅在历史段内把 H1 视觉上降到「版本小节标题」的量级。
+   只改视觉，不改原文内容。
+   ========================================================================== */
+.changelog-history h1 {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-weight: 600;
+  margin: 1rem 0 0.5rem;
+  color: hsl(var(--text-secondary, 220 9% 46%));
+}
+
+.changelog-history h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0.875rem 0 0.375rem;
+}
+
+.changelog-history h3,
+.changelog-history h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+
+/* 历史版本之间的分隔线更细一点，避免和内容抢视线 */
+.changelog-history hr {
+  margin: 1rem 0;
+  border-color: hsl(var(--border, 220 13% 91%));
+  opacity: 0.6;
 }
