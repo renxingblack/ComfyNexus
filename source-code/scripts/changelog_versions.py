@@ -98,75 +98,95 @@ VERSIONS = [
         "type": "功能版（Stable）",
         "body_zh": """## ✨ 新增功能
 
-### 🗂 模型管理
+### 🗂 模型管理（全新模块）
 
-- **本地模型库浏览** - 递归扫描环境 `models/` 下全部子目录，按类型分组展示，支持关键字搜索
-- **模型多源下载** - 自动识别 HuggingFace、HF-Mirror、魔搭社区、Civitai 及任意直链，失败时自动切换国内镜像
-- **模型文件夹多路径设置** - 支持配置多个模型目录，逐个开关与删除
-- **网络链接同步** - 可将在线模型库链接加入本地列表，直接浏览与下载
-- **默认链接源可切换** - 内置多个模型库链接源，可随时切换
-- **单文件手动关联** - 下载后的文件可手动关联到指定模型类型
+- **本地模型库浏览**
+  - 递归扫描环境 `models/` 目录下全部子目录，自动按类型分组（checkpoints / loras / vae / controlnet 等）
+  - 支持关键字搜索模型文件名，输入即时过滤
+  - 支持按名称、大小、修改时间三种方式排序
+  - 提供三种查看方式：详细列表、宽松平铺、紧凑平铺
+  - 扫描结果缓存并防抖落盘，重复进入秒级加载
+- **网络模型下载（多源自动识别）**
+  - 自动识别 HuggingFace、HF-Mirror、魔搭社区（ModelScope）、Civitai 及任意直链
+  - HuggingFace 官方源失败时自动切换 `hf-mirror.com` 国内镜像重试
+  - 支持断点续传（`.part` 临时文件 + Range 请求，服务器不支持时自动退回全量下载）
+  - 下载任务串行入队，实时显示进度、速度与剩余时间，完成后可清空已完成任务
+- **本地模型文件夹多路径**
+  - 支持配置多个模型目录，每个路径可单独启用、禁用或删除
+  - 默认扫描 ComfyUI 环境的 `models` 目录，首次使用给出引导
+- **网络链接同步与关联**
+  - 「同步链接」一键为所有未关联的本地模型自动匹配网络链接（魔搭优先，其次 HuggingFace）
+  - 单文件手动关联，候选链接点击选择或手动输入，可覆盖
+  - 支持移除已关联的链接
+- **模型删除**：删除操作二次确认，不可恢复
+
+### 🧩 LoRA 管理增强
+
+- **本地 LoRA 文件夹多路径**：支持配置多个 LoRA 目录，逐个启用 / 禁用 / 删除
+- **刷新按钮**：磁盘文件变动后可一键重新扫描并同步列表
+- **空路径可保存**：允许把路径保存为空，不再强制保留旧值
+- **Civitai 信息拉取**：支持全量拉取与增量拉取两种模式（增量仅处理未查询过的模型）
+- **模型资料完善**：支持预览图上传 / 删除、触发词、默认权重、采样器 / 调度器、自定义标签、备注信息
+- **快速筛选与统计**：支持按分类快速筛选，显示模型总数与总大小
 
 ### 🔌 插件管理
 
-- **新增「大小」列** - 插件列表展示每个插件占用磁盘空间，便于清理
+- **新增「大小」列**：插件列表展示每个插件占用的磁盘空间，便于清理
+- **更完整的列表信息**：显示启用状态、分支、版本、安装日期、更新时间
+- **批量开关**：支持一键全部启用 / 全部禁用
 
 ### 🪟 窗口与界面
 
-- **窗口尺寸预设** - 设置页提供常用尺寸一键切换
-- **内容随窗口自适应** - 窗口缩放时界面布局自动重排
+- **窗口尺寸预设**：设置页提供常用尺寸一键切换，保存后立即生效
+- **窗口最小尺寸保护**：窗口不小于 1024×640，避免拖得过小导致界面元素无法完整显示
+- **内容随窗口自适应**：窗口缩放时界面布局自动重排，内容不再溢出
 
-### 🚀 0 基础安装
+### 🚀 零基础安装（全新引导）
 
-- **安装步骤重排** - 按实际依赖顺序展示，降低新手理解成本
-- **依赖滚动展示** - 长列表依赖在固定区域内滚动，不再撑高页面
-- **进度按字节总量计算** - 下载进度以实际字节数为准，不再出现百分比跳变
-- **工作流多源下载** - 工作流资源支持多个下载源自动切换
-- **安装资源持久化** - 已下载的安装资源保留在本地，重装无需重复下载
-
-### 🧩 LoRA 管理
-
-- **本地文件夹多路径设置** - 支持配置多个 LoRA 目录，逐个开关与删除
-- **刷新按钮** - 磁盘文件变动后可一键重新扫描同步
-- **空路径可保存** - 允许把路径保存为空，不再强制保留旧值
+- **安装步骤重排**：按真实依赖顺序展示为 安装位置 → ComfyUI 版本 → 注意力后端 → 模型（仅链接）→ 插件 → 确认安装，降低新手理解成本
+- **进度按字节总量计算**：下载进度以实际字节数为准，不再出现百分比跳变
+- **依赖滚动展示**：长列表依赖在固定区域内滚动，不再撑高页面
+- **工作流多源下载**：内置官方 10 条推荐工作流，支持多个下载源自动切换
+- **安装资源持久化**：已下载的安装资源保留在本地，重装无需重复下载
+- **安装状态自动恢复**：安装线程后台运行，切页后自动恢复到进度页，不渲染空进度页
 
 ### 📦 安装包
 
-- **默认安装路径 `D:\\Program\\ComfyNexus\\`** - 安装时自动创建目录
-- **支持自定义安装目录** - 安装向导可选择任意路径
+- **默认安装路径 `D:\\Program\\ComfyNexus\\`** ：安装时自动创建目录
+- **支持自定义安装目录**：安装向导可选择任意路径
 
 ## 🐛 问题修复
 
 ### 窗口相关
 
-- **修复拖动四角时窗口平移、尺寸不变** - 窗口不再跟随鼠标移动
-- **修复缩小时界面四周显示不全** - 最大化、关闭等按钮不再被挤出可视区
-- **修复缩放窗口时界面卡死** - 缩放过程不再触发全站样式重算
-- **修复窗口变窄后内容溢出** - 内容自动收缩，不再溢出到窗口外
-- **修复四周露出边框、内容被裁掉** - 窗口边缘与内容对齐
-- **修复点一下四角就变成最大化** - 拖动角不再误触发最大化
-- **修复窗口大小设置后无效** - 设置页选择的尺寸立即生效
-- **修复进出全屏后四角缩放失效** - 全屏切换后四角仍可正常拖动
+- 修复拖动四角时窗口平移、尺寸不变的问题，窗口不再跟随鼠标移动
+- 修复缩小时界面四周显示不全，最大化 / 关闭等按钮不再被挤出可视区
+- 修复缩放窗口时界面卡死，缩放过程不再触发全站样式重算
+- 修复窗口变窄后内容溢出，内容自动收缩不再溢出到窗口外
+- 修复四周露出边框、内容被裁掉，窗口边缘与内容对齐
+- 修复点一下四角就变成最大化，拖动角不再误触发最大化
+- 修复窗口大小设置后无效，设置页选择的尺寸立即生效
+- 修复进出全屏后四角缩放失效，全屏切换后四角仍可正常拖动
 
 ### 其他修复
 
-- **修复打开工作流无响应** - 工作流文件可正常载入
-- **修复工作流名称显示为 `Unsaved Workflow`** - 正确显示实际文件名
-- **修复工作流文件结构校验缺失** - 无效文件给出明确提示
-- **修复桥接 API 返回值被二次包装** - 前端不再拿到嵌套数据
-- **修复核心管理「版本更新」失败** - 版本更新流程正常完成
-- **修复插件安装卡在 40%** - 安装进度可正常完成
-- **修复「自动下载缺失节点」开关无效** - 开关状态正确生效
-- **修复「添加环境」进入空白页** - 页面正常加载
-- **修复常用工具图标显示为地球** - 图标正确匹配
-- **修复白屏闪退** - 启动稳定性提升
-- **修复插件目录删除后仍显示** - 列表与实际目录保持同步
+- 修复打开工作流无响应，工作流文件可正常载入
+- 修复工作流名称显示为 `Unsaved Workflow`，正确显示实际文件名
+- 修复工作流文件结构校验缺失，无效文件给出明确提示
+- 修复桥接 API 返回值被二次包装，前端不再拿到嵌套数据
+- 修复核心管理「版本更新」失败，版本更新流程可正常完成
+- 修复插件安装卡在 40%，安装进度可正常完成
+- 修复「自动下载缺失节点」开关无效，开关状态正确生效
+- 修复「添加环境」进入空白页，页面正常加载
+- 修复常用工具图标显示为地球，图标正确匹配
+- 修复白屏闪退，启动稳定性提升
+- 修复插件目录删除后仍显示，列表与实际目录保持同步
 
 ## 🎨 界面优化
 
-- **万级列表渐进渲染** - 大量条目分批加载，滚动更流畅
-- **批量写入合并** - 频繁保存时合并写盘，减少卡顿
-- **版本号统一** - 关于页、标题栏、安装包显示一致
+- **万级列表渐进渲染**：大量条目分批加载，滚动更流畅
+- **批量写入合并**：频繁保存时合并写盘，减少卡顿
+- **版本号统一**：关于页、标题栏、安装包三处版本号显示一致
 
 ## 📌 升级说明
 
@@ -177,75 +197,95 @@ VERSIONS = [
 
 ## ✨ New Features
 
-### 🗂 Model Management
+### 🗂 Model Management (brand-new module)
 
-- **Local model library browsing** - Recursively scans every subdirectory under `models/`, groups entries by type, and supports keyword search
-- **Multi-source model downloads** - Automatically detects HuggingFace, HF-Mirror, ModelScope, Civitai, and any direct link, switching to a domestic mirror on failure
-- **Multiple model folder paths** - Configure several model directories with per-path enable/disable and deletion
-- **Online library link sync** - Add online model library links to your local list for direct browsing and downloading
-- **Switchable default link sources** - Multiple built-in model library sources you can switch between at any time
-- **Manual single-file association** - Map a downloaded file to a specific model type by hand
+- **Local model library browsing**
+  - Recursively scans every subdirectory under `models/`, grouping entries by type (checkpoints / loras / vae / controlnet, etc.)
+  - Keyword search by filename with instant filtering
+  - Sort by name, size, or modified time
+  - Three view modes: detailed list, loose grid, compact grid
+  - Scan results are cached and debounce-flushed to disk for near-instant reload
+- **Multi-source model downloads**
+  - Auto-detects HuggingFace, HF-Mirror, ModelScope, Civitai, and any direct link
+  - HuggingFace's official source automatically falls back to the `hf-mirror.com` domestic mirror on failure
+  - Resumable downloads (`.part` temp file + Range requests; falls back to full download when unsupported)
+  - Serial download queue with live progress, speed, and ETA; finished tasks can be cleared
+- **Multiple local model folders**
+  - Configure several model directories, each individually enabled, disabled, or removed
+  - Scans the ComfyUI environment's `models` directory by default, with first-run guidance
+- **Online link sync & association**
+  - One-click "Sync Links" auto-matches online links for all unlinked local models (ModelScope first, then HuggingFace)
+  - Per-file manual association with click-to-pick candidates or manual input
+  - Remove an existing association at any time
+- **Model deletion** with a confirmation dialog (irreversible)
+
+### 🧩 LoRA Management Enhancements
+
+- **Multiple local LoRA folders**: configure several LoRA directories, each individually enabled / disabled / removed
+- **Refresh button**: rescan and resync the list after on-disk changes with one click
+- **Empty paths can be saved**: no longer forced to keep the old value
+- **Civitai metadata pull**: full and incremental modes (incremental only processes models not yet queried)
+- **Richer model metadata**: preview image upload / delete, trigger words, default weight, sampler / scheduler, custom tags, notes
+- **Quick filter & stats**: filter by category and see total count and total size
 
 ### 🔌 Plugin Management
 
-- **New Size column** - The plugin list shows how much disk space each plugin occupies, making cleanup easier
+- **New Size column**: the plugin list shows disk space per plugin, making cleanup easier
+- **Fuller list info**: enabled state, branch, version, install date, and update time
+- **Bulk toggle**: enable all / disable all with one click
 
 ### 🪟 Window & Interface
 
-- **Window size presets** - One-click switching between common sizes in Settings
-- **Content adapts to window size** - The layout reflows automatically as the window is resized
+- **Window size presets**: one-click switching between common sizes in Settings, applied immediately
+- **Minimum window size protection**: never shrinks below 1024×640 so UI elements stay fully visible
+- **Content adapts to window size**: layout reflows on resize with no overflow
 
-### 🚀 Zero-Basics Installation
+### 🚀 Zero-Basics Installation (new guided wizard)
 
-- **Reordered installation steps** - Steps follow the real dependency order, easier for newcomers
-- **Scrollable dependency list** - Long dependency lists scroll inside a fixed area instead of stretching the page
-- **Byte-based progress** - Download progress reflects actual bytes transferred, eliminating percentage jumps
-- **Multi-source workflow downloads** - Workflow assets switch between several download sources automatically
-- **Persistent install assets** - Downloaded install assets are kept locally, so reinstalling requires no re-download
-
-### 🧩 LoRA Management
-
-- **Multiple LoRA folder paths** - Configure several LoRA directories with per-path enable/disable and deletion
-- **Refresh button** - Rescan and resync after changes on disk with one click
-- **Empty paths can be saved** - Paths may now be saved as empty instead of being forced to keep the old value
+- **Reordered steps**: Install location → ComfyUI version → Attention backend → Models (links only) → Plugins → Confirm, following the real dependency order for newcomers
+- **Byte-based progress**: download progress reflects actual bytes, eliminating percentage jumps
+- **Scrollable dependency list**: long dependency lists scroll inside a fixed area instead of stretching the page
+- **Multi-source workflow downloads**: 10 built-in official recommended workflows with automatic source switching
+- **Persistent install assets**: downloaded assets are kept locally so reinstalling requires no re-download
+- **Auto-resume install state**: the install thread runs in the background and auto-returns to the progress page on navigation, never rendering an empty progress view
 
 ### 📦 Installer
 
-- **Default install path `D:\\Program\\ComfyNexus\\`** - Created automatically during installation
-- **Custom install directory** - Choose any path in the setup wizard
+- **Default install path `D:\\Program\\ComfyNexus\\`** : created automatically during installation
+- **Custom install directory**: choose any path in the setup wizard
 
 ## 🐛 Bug Fixes
 
 ### Window
 
-- **Fixed: window shifted while dragging a corner without resizing** - The window no longer moves with the cursor
-- **Fixed: UI was clipped when shrinking the window** - Maximize and close buttons are no longer pushed out of view
-- **Fixed: interface froze while resizing** - Resizing no longer triggers site-wide style recalculation
-- **Fixed: content overflowed when the window narrowed** - Content now shrinks instead of overflowing
-- **Fixed: borders showed around the edges and content was cropped** - Window edges now align with content
-- **Fixed: a single click on a corner maximized the window** - Dragging a corner no longer triggers maximize
-- **Fixed: the window size setting had no effect** - The size chosen in Settings now applies immediately
-- **Fixed: corner resizing broke after toggling fullscreen** - Corners still work after fullscreen transitions
+- Fixed window shifting without resizing when dragging a corner; the window no longer moves with the cursor
+- Fixed UI being clipped when shrinking the window; maximize/close buttons are no longer pushed out of view
+- Fixed the interface freezing while resizing; resizing no longer triggers site-wide style recalculation
+- Fixed content overflowing when the window narrowed; content now shrinks instead of overflowing
+- Fixed borders showing around the edges with content cropped; window edges now align with content
+- Fixed a single corner click maximizing the window; dragging a corner no longer triggers maximize
+- Fixed the window size setting having no effect; the chosen size now applies immediately
+- Fixed corner resizing breaking after toggling fullscreen; corners still work after fullscreen transitions
 
 ### Other Fixes
 
-- **Fixed: opening a workflow did nothing** - Workflow files now load correctly
-- **Fixed: workflow names showed as `Unsaved Workflow`** - The actual filename is now displayed
-- **Fixed: missing workflow file structure validation** - Invalid files now produce a clear message
-- **Fixed: bridge API return values were double-wrapped** - The frontend no longer receives nested data
-- **Fixed: version update in core management failed** - The update flow now completes normally
-- **Fixed: plugin installation stalled at 40%** - Installation progress now finishes
-- **Fixed: the Auto-download missing nodes toggle had no effect** - The toggle state now applies correctly
-- **Fixed: Add Environment opened a blank page** - The page now loads normally
-- **Fixed: common tool icons showed a globe** - Icons now match correctly
-- **Fixed: white-screen crash** - Improved startup stability
-- **Fixed: deleted plugin directories still appeared** - The list stays in sync with the actual directories
+- Fixed opening a workflow doing nothing; workflow files now load correctly
+- Fixed workflow names showing as `Unsaved Workflow`; the actual filename is now displayed
+- Fixed missing workflow structure validation; invalid files now produce a clear message
+- Fixed bridge API return values being double-wrapped; the frontend no longer receives nested data
+- Fixed the version update in core management failing; the update flow now completes normally
+- Fixed plugin installation stalling at 40%; installation progress now finishes
+- Fixed the Auto-download missing nodes toggle having no effect; the toggle state now applies correctly
+- Fixed Add Environment opening a blank page; the page now loads normally
+- Fixed common tool icons showing a globe; icons now match correctly
+- Fixed white-screen crash; improved startup stability
+- Fixed deleted plugin directories still appearing; the list stays in sync with actual directories
 
 ## 🎨 UI/UX Improvements
 
-- **Progressive rendering for huge lists** - Large lists load in batches for smoother scrolling
-- **Batched writes** - Frequent saves are merged into a single disk write, reducing stutter
-- **Unified version number** - Consistent across the About page, title bar, and installer
+- **Progressive rendering for huge lists**: large lists load in batches for smoother scrolling
+- **Batched writes**: frequent saves are merged into a single disk write, reducing stutter
+- **Unified version number**: consistent across the About page, title bar, and installer
 
 ## 📌 Upgrade Notes
 
