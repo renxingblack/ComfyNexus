@@ -22,8 +22,7 @@ import { Loading } from '@/components/ui/Loading'
 import { MarkdownRenderer } from '@/components/ai/MarkdownRenderer'
 import { fetchReleases, normalizeTag, GitHubRelease, formatReleaseDate } from '@/api/githubApi'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ChevronRight, ExternalLink, RefreshCw } from 'lucide-react'
-import { GITHUB_RELEASES_URL } from '@/api/githubApi'
+import { ChevronRight, ExternalLink, RefreshCw, Github } from 'lucide-react'
 
 interface ChangelogDialogProps {
   open: boolean
@@ -371,16 +370,27 @@ export function ChangelogDialog({
           )}
         </div>
 
-        <div className="mt-6 flex items-center justify-between border-t border-border pt-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => openExternal(GITHUB_RELEASES_URL)}
-            className="text-muted-foreground"
-          >
-            <ExternalLink className="mr-2 size-4" />
-            {t('about.viewFullLog')}
-          </Button>
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openExternal('https://github.com/Allen-xxa/ComfyNexus/releases')}
+              className="text-muted-foreground"
+            >
+              <Github className="mr-2 size-4" />
+              {t('about.viewOriginalLog')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openExternal('https://github.com/renxingblack/ComfyNexus/releases')}
+              className="text-muted-foreground"
+            >
+              <Github className="mr-2 size-4" />
+              {t('about.viewCurrentLog')}
+            </Button>
+          </div>
           <Button onClick={() => handleOpenChange(false)}>
             {t('common.close')}
           </Button>

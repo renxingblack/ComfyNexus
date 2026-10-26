@@ -2,9 +2,34 @@ import { useTranslation } from 'react-i18next'
 import { Code2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 
-const techStackItems = [
+/** 核心技术栈清单（与 source-code/backend/requirements.txt、frontend/package.json 实际依赖同步） */
+export const techStackItems = [
   {
-    name: 'Python 3.12.x',
+    name: 'Python 3.13.x',
+    bgColor: 'bg-primary/10',
+    borderColor: 'border-primary/30',
+    textColor: 'text-primary',
+  },
+  {
+    name: 'Flask 3.x',
+    bgColor: 'bg-primary/10',
+    borderColor: 'border-primary/30',
+    textColor: 'text-primary',
+  },
+  {
+    name: 'pywebview 6.x',
+    bgColor: 'bg-primary/10',
+    borderColor: 'border-primary/30',
+    textColor: 'text-primary',
+  },
+  {
+    name: 'pythonnet 3.x',
+    bgColor: 'bg-primary/10',
+    borderColor: 'border-primary/30',
+    textColor: 'text-primary',
+  },
+  {
+    name: 'PyInstaller 6.x',
     bgColor: 'bg-primary/10',
     borderColor: 'border-primary/30',
     textColor: 'text-primary',
@@ -16,22 +41,40 @@ const techStackItems = [
     textColor: 'text-info',
   },
   {
-    name: 'Vite 7.x',
-    bgColor: 'bg-primary/10',
-    borderColor: 'border-primary/30',
-    textColor: 'text-primary',
+    name: 'TypeScript 5.9.x',
+    bgColor: 'bg-info/10',
+    borderColor: 'border-info/30',
+    textColor: 'text-info',
   },
   {
-    name: 'Tailwind CSS 3.4.19',
+    name: 'Vite 7.x',
+    bgColor: 'bg-info/10',
+    borderColor: 'border-info/30',
+    textColor: 'text-info',
+  },
+  {
+    name: 'Zustand 5.x',
+    bgColor: 'bg-info/10',
+    borderColor: 'border-info/30',
+    textColor: 'text-info',
+  },
+  {
+    name: 'Tailwind CSS 3.4.x',
     bgColor: 'bg-success/10',
     borderColor: 'border-success/30',
     textColor: 'text-success',
   },
   {
-    name: 'pywebview 6.x',
-    bgColor: 'bg-muted',
-    borderColor: 'border-border',
-    textColor: 'text-muted-foreground',
+    name: 'ECharts 6.x',
+    bgColor: 'bg-warning/10',
+    borderColor: 'border-warning/30',
+    textColor: 'text-warning',
+  },
+  {
+    name: 'React Flow 12.x',
+    bgColor: 'bg-warning/10',
+    borderColor: 'border-warning/30',
+    textColor: 'text-warning',
   },
 ]
 

@@ -2961,6 +2961,11 @@
     "checkUpdate": "Check for Updates",
     "latest": "Latest",
     "viewFullLog": "View Full Changelog",
+    "viewOriginalLog": "View Original Project Log",
+    "viewCurrentLog": "View Current Project Log",
+    "repoLinks": "Repository Links",
+    "originalAuthorRepo": "Original Author Repo",
+    "currentRepo": "This Project Repo",
     "projectIntro": {
       "title": "About Project",
       "slogan": "Connect creativity, simplify complexity.",

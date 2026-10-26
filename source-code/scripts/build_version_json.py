@@ -56,8 +56,8 @@ ORIGINAL_RELEASES_FILE = Path(__file__).resolve().parent / "original_releases.js
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from changelog_versions import VERSIONS, get_local_notes  # noqa: E402
 
-VERSION = "v1.3.1"
-PUBLISHED_AT = "2026-10-24T00:00:00Z"
+VERSION = "v1.3.3"
+PUBLISHED_AT = "2026-10-25T00:00:00Z"
 REPO = "renxingblack/ComfyNexus"
 
 HISTORY_TITLE = (

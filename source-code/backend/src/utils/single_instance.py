@@ -38,12 +38,23 @@ GetLastError.argtypes = []
 GetLastError.restype = DWORD
 
 EnumWindows = user32.EnumWindows
-EnumWindows.argtypes = [ctypes.c_void_p, wintypes.LPARAM]
+# **必须用真正的回调类型**，不能用 c_void_p：
+# 传 c_void_p 时 ctypes 无法把 WINFUNCTYPE 实例转成指针（或按默认 int 截断参数），
+# 回调会被静默跳过，EnumWindows 返回后一个窗口都收不到。
+# 这类失败完全不报错，只会让「枚举兜底」形同虚设 —— 以前只能靠 FindWindowW，
+# 而 FindWindowW 在 Win11 上又会命中 TabProxyWindow，两个兜底同时失效。
+_WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, HWND, wintypes.LPARAM)
+EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
 EnumWindows.restype = BOOL
 
 GetWindowTextW = user32.GetWindowTextW
 GetWindowTextW.argtypes = [HWND, LPWSTR, ctypes.c_int]
 GetWindowTextW.restype = ctypes.c_int
+
+# 取窗口类名。用于识别并排除 Win11 的 TabProxyWindow（同名干扰项）。
+GetClassNameW = user32.GetClassNameW
+GetClassNameW.argtypes = [HWND, LPWSTR, ctypes.c_int]
+GetClassNameW.restype = ctypes.c_int
 
 IsWindowVisible = user32.IsWindowVisible
 IsWindowVisible.argtypes = [HWND]
@@ -113,30 +124,54 @@ class SingleInstance:
         """
         激活已存在的窗口（含托盘隐藏状态）
 
-        先按精确标题找，找不到再枚举所有顶层窗口匹配标题包含 app_name。
+        **不能直接用 `FindWindowW(None, app_name)` 的结果**（本轮实测的坑）：
+          Win11 文件资源管理器标签化后，会为每个顶层窗口在 explorer.exe 里
+          创建一个**同名**伴生窗口 `Windows.Internal.Shell.TabProxyWindow`。
+          `FindWindowW` 只按标题匹配，会先命中它 —— 于是「激活已有实例」变成了
+          去 `ShowWindow`/`SetForegroundWindow` 一个**别人家进程**的窗口，
+          真正的应用窗口毫无反应，用户二次启动时看起来「什么都没有发生」。
+
+        改为：枚举所有顶层窗口，要求「标题含 app_name」**且**类名不是
+        TabProxyWindow。找不到再退化为按标题精确匹配（旧行为）。
         Returns: 是否成功找到并激活
         """
-        hwnd = FindWindowW(None, self.app_name)
+        found = []
+        EnumWindows_CB = ctypes.WINFUNCTYPE(ctypes.c_bool, HWND, wintypes.LPARAM)
+
+        def _is_proxy(h) -> bool:
+            """是否是 explorer 的标签页代理窗口（同名干扰项，必须排除）。"""
+            try:
+                cls_buf = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(h, cls_buf, 256)
+                return "TabProxyWindow" in (cls_buf.value or "")
+            except Exception:
+                return False
+
+        def _cb(h, _l):
+            try:
+                buf = ctypes.create_unicode_buffer(256)
+                user32.GetWindowTextW(h, buf, 256)
+                # 不检查 IsWindowVisible：托盘隐藏（SW_HIDE）的窗口也必须能找到，
+                # 否则用户从托盘状态下二次启动会误判「无窗口」而弹错误框
+                if self.app_name in (buf.value or "") and not _is_proxy(h):
+                    found.append(h)
+            except Exception:
+                pass
+            return True
+
+        try:
+            user32.EnumWindows(EnumWindows_CB(_cb), 0)
+        except Exception:
+            pass
+
+        hwnd = found[0] if found else None
 
         if not hwnd or hwnd == 0:
-            # 枚举顶层窗口：标题包含 app_name 即命中（防标题被页面内容改动）
-            found = []
-            EnumWindows_CB = ctypes.WINFUNCTYPE(ctypes.c_bool, HWND, wintypes.LPARAM)
-
-            def _cb(h, _l):
-                try:
-                    buf = ctypes.create_unicode_buffer(256)
-                    user32.GetWindowTextW(h, buf, 256)
-                    # 不检查 IsWindowVisible：托盘隐藏（SW_HIDE）的窗口也必须能找到，
-                    # 否则用户从托盘状态下二次启动会误判「无窗口」而弹错误框
-                    if self.app_name in (buf.value or ""):
-                        found.append(h)
-                except Exception:
-                    pass
-                return True
-
-            user32.EnumWindows(EnumWindows_CB(_cb), 0)
-            hwnd = found[0] if found else None
+            # 最后兜底：老的精确标题查找（仅在枚举完全失效时使用）
+            hwnd = FindWindowW(None, self.app_name)
+            if hwnd and _is_proxy(hwnd):
+                # 命中的是代理窗口，宁可当作没找到，也不要去激活别人的窗口
+                hwnd = None
 
         if hwnd and hwnd != 0:
             try:

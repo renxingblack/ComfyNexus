@@ -457,13 +457,8 @@ class Api:
                     import ctypes
                     user32 = ctypes.windll.user32
                     
-                    # 获取窗口句柄
-                    hwnd = None
-                    if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                        hwnd = self._window.gui.hwnd
-                    
-                    if not hwnd or hwnd == 0:
-                        hwnd = user32.FindWindowW(None, "ComfyNexus")
+                    # 获取窗口句柄（必须走权威解析，不能用 FindWindowW 按标题猜）
+                    hwnd = self._get_hwnd()
                     
                     if hwnd and hwnd != 0:
                         # 先还原窗口（位置必须钳制进工作区，否则顶边可能跑到
@@ -528,17 +523,10 @@ class Api:
             try:
                 import ctypes
 
-                # 优先尝试从 pywebview 获取窗口句柄
-                hwnd = None
-                if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                    hwnd = self._window.gui.hwnd
-                    logger.debug(f"[最大化] 从 pywebview.gui.hwnd 获取窗口句柄: {hwnd}")
-
-                # 如果失败，尝试通过窗口标题查找
-                if not hwnd or hwnd == 0:
-                    user32 = ctypes.windll.user32
-                    hwnd = user32.FindWindowW(None, "ComfyNexus")
-                    logger.debug(f"[最大化] 通过 FindWindowW 查找窗口句柄: {hwnd}")
+                # 取窗口句柄：必须走权威解析（详见 _get_hwnd 的注释）。
+                # 用 FindWindowW 按标题猜会命 Win11 的 TabProxyWindow。
+                hwnd = self._get_hwnd()
+                logger.debug(f"[最大化] 窗口句柄: {hwnd}")
 
                 if hwnd and hwnd != 0:
                     user32 = ctypes.windll.user32
@@ -807,23 +795,22 @@ class Api:
         return round(1680 * self._dpi_scale), round(1080 * self._dpi_scale)
 
     def _get_hwnd(self):
-        """取当前有效窗口句柄（gui.hwnd → FindWindowW 兜底）。
+        """取当前有效窗口句柄（权威解析，详见 window_bounds.resolve_app_hwnd）。
+
+        **不要再用 `FindWindowW(None, "ComfyNexus")`**：Win11 的
+        `Windows.Internal.Shell.TabProxyWindow` 标题与本窗口相同且由 explorer.exe 持有，
+        FindWindowW 会先命中它，导致钩子/样式全部施加到**外部进程窗口**上
+        （跨进程 SetWindowLongPtrW 被拒），本窗口则丢掉 WS_THICKFRAME →
+        四角缩放彻底失效。这是本轮实测确认的根因。
 
         统一收口，避免各处重复写 try/except，也避免某些路径忘了取 hwnd
         就直接调 pywebview API（历史上 resizeWindow 就是这么漏掉句柄的）。
         """
         try:
-            if self._window is not None:
-                gui = getattr(self._window, 'gui', None)
-                hwnd = getattr(gui, 'hwnd', None) if gui else None
-                if hwnd:
-                    return hwnd
-        except Exception:
-            pass
-        try:
-            import ctypes
-            return ctypes.windll.user32.FindWindowW(None, "ComfyNexus")
-        except Exception:
+            from backend.src.utils.window_bounds import resolve_app_hwnd
+            return resolve_app_hwnd(self._window)
+        except Exception as exc:
+            logger.debug(f"[窗口句柄] 权威解析失败: {exc}")
             return 0
 
     def _restore_window_rect_clamped(self, hwnd=None):
@@ -869,15 +856,7 @@ class Api:
         """
         try:
             if not hwnd:
-                try:
-                    if self._window is not None:
-                        gui = getattr(self._window, 'gui', None)
-                        hwnd = getattr(gui, 'hwnd', None) if gui else None
-                except Exception:
-                    hwnd = None
-            if not hwnd:
-                import ctypes
-                hwnd = ctypes.windll.user32.FindWindowW(None, "ComfyNexus")
+                hwnd = self._get_hwnd()
             if not hwnd:
                 return
             from backend.src.utils.window_bounds import refresh_corner_resize
@@ -983,22 +962,14 @@ class Api:
                 
                 user32 = ctypes.windll.user32
                 
-                # 等待窗口创建完成（最多等待 5 秒）
-                hwnd = None
+                # 等待窗口创建完成（最多等待 5 秒）。
+                # 必须走权威解析：FindWindowW 按标题会命中 Win11 TabProxyWindow。
+                hwnd = 0
                 for attempt in range(50):  # 50 次 * 0.1 秒 = 5 秒
-                    # 优先尝试从 pywebview 获取
-                    if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                        hwnd = self._window.gui.hwnd
-                        if hwnd and hwnd != 0:
-                            logger.debug(f"[窗口监听] 从 pywebview.gui.hwnd 获取窗口句柄: {hwnd}")
-                            break
-                    
-                    # 尝试通过窗口标题查找
-                    hwnd = user32.FindWindowW(None, "ComfyNexus")
+                    hwnd = self._get_hwnd()
                     if hwnd and hwnd != 0:
-                        logger.debug(f"[窗口监听] 通过 FindWindowW 获取窗口句柄: {hwnd} (尝试 {attempt + 1}/50)")
+                        logger.debug(f"[窗口监听] 获取窗口句柄: {hwnd} (尝试 {attempt + 1}/50)")
                         break
-                    
                     time.sleep(0.1)
                 
                 if not hwnd or hwnd == 0:
@@ -1233,13 +1204,8 @@ class Api:
             
             user32 = ctypes.windll.user32
             
-            # 获取窗口句柄
-            hwnd = None
-            if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                hwnd = self._window.gui.hwnd
-            
-            if not hwnd or hwnd == 0:
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
+            # 获取窗口句柄（权威解析，避免 Win11 TabProxyWindow 干扰）
+            hwnd = self._get_hwnd()
             
             if hwnd and hwnd != 0:
                 # 释放鼠标捕获
@@ -1296,12 +1262,7 @@ class Api:
             
             user32 = ctypes.windll.user32
             
-            hwnd = None
-            if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                hwnd = self._window.gui.hwnd
-            
-            if not hwnd or hwnd == 0:
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
+            hwnd = self._get_hwnd()
             
             if not hwnd or hwnd == 0:
                 logger.error("[拖动还原] 无法获取窗口句柄")
@@ -1477,14 +1438,8 @@ class Api:
             import ctypes
             user32 = ctypes.windll.user32
             
-            hwnd = None
-            if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                hwnd = self._window.gui.hwnd
-                logger.debug(f"[全屏转最大化] 获取窗口句柄: {hwnd}")
-            
-            if not hwnd or hwnd == 0:
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
-                logger.debug(f"[全屏转最大化] 通过 FindWindowW 查找窗口句柄: {hwnd}")
+            hwnd = self._get_hwnd()
+            logger.debug(f"[全屏转最大化] 获取窗口句柄: {hwnd}")
             
             if hwnd and hwnd != 0:
                 self._save_window_rect(hwnd)
@@ -1547,12 +1502,7 @@ class Api:
             import ctypes
             user32 = ctypes.windll.user32
             
-            hwnd = None
-            if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                hwnd = self._window.gui.hwnd
-            
-            if not hwnd or hwnd == 0:
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
+            hwnd = self._get_hwnd()
             
             if hwnd and hwnd != 0:
                 from backend.src.utils.window_bounds import RECT
@@ -1584,12 +1534,7 @@ class Api:
             import ctypes
             user32 = ctypes.windll.user32
             
-            hwnd = None
-            if hasattr(self._window, 'gui') and hasattr(self._window.gui, 'hwnd'):
-                hwnd = self._window.gui.hwnd
-            
-            if not hwnd or hwnd == 0:
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
+            hwnd = self._get_hwnd()
             
             if hwnd and hwnd != 0:
                 user32.SetWindowPos(hwnd, None, physical_x, physical_y, 0, 0, 0x0001 | 0x0004)
@@ -1616,15 +1561,7 @@ class Api:
 
             # 拿到窗口句柄。下面需要它来判断/解除最大化状态，
             # 并把「位置 + 尺寸」一次性交给 SetWindowPos。
-            hwnd = None
-            try:
-                if self._window is not None:
-                    gui = getattr(self._window, 'gui', None)
-                    hwnd = getattr(gui, 'hwnd', None) if gui else None
-            except Exception:
-                hwnd = None
-            if not hwnd:
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
+            hwnd = self._get_hwnd()
             
             screen_width = user32.GetSystemMetrics(0)
             screen_height = user32.GetSystemMetrics(1)

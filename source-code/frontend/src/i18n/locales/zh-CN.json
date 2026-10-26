@@ -3082,6 +3082,11 @@
     "checkUpdate": "检查更新",
     "latest": "最新",
     "viewFullLog": "查看完整日志",
+    "viewOriginalLog": "查看原项目日志",
+    "viewCurrentLog": "查看当前项目日志",
+    "repoLinks": "项目地址",
+    "originalAuthorRepo": "原作者仓库",
+    "currentRepo": "本项目仓库",
     "projectIntro": {
       "title": "关于项目",
       "slogan": "联结创意，驭繁就简。",

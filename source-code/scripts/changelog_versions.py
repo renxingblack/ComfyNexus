@@ -22,6 +22,82 @@ ComfyNexus 自有版本更新日志（v1.2.6 → v1.3.1）
 # 顺序：最新在前
 VERSIONS = [
     # ------------------------------------------------------------------
+    # v1.3.3
+    # ------------------------------------------------------------------
+    {
+        "version": "v1.3.3",
+        "date": "2026-10-26",
+        "type": "修复版（Stable）",
+        "body_zh": """## 🐛 问题修复
+
+- **修复「关于」页在小窗口下布局被压扁、更新日志看不到也无法下拉** - 窗口拉小后各板块被无限压缩，更新日志只剩一条窄缝，内容看不全也滚不动；现改为给更新日志一个固定的可读高度，窗口装不下时整页上下滚动，滚到即可完整查看
+- **修复「关于」页在中等窗口下更新日志可视区域过小** - 原先在 1280×800 这类尺寸下仍强行排成三列，日志区只剩很窄一条；现改为该尺寸走单列滚动布局，日志区高度与其他尺寸保持一致
+
+## 🎨 界面优化
+
+- **「关于」页布局按可用空间自适应** - 窗口宽高都充足时，各板块铺满一屏、日志在版块内滚动；空间不足时自动切换为单列、整页滚动，任何窗口尺寸下都能把更新日志完整看到
+- **版本更新至 v1.3.3**
+
+---
+
+## 🐛 Bug Fixes
+
+- **Fixed: the About page layout collapsed in small windows, making the changelog unreadable and unscrollable** - Shrinking the window squeezed every panel without limit until the changelog was reduced to a narrow slit that could neither be read nor scrolled. The changelog now keeps a fixed readable height, and when the window cannot fit everything the whole page scrolls, so it is fully viewable once scrolled to
+- **Fixed: the changelog viewport was too small on medium-sized windows** - At sizes like 1280x800 the page still forced a three-column layout, leaving only a thin strip for the log. Such sizes now use the single-column scrolling layout, keeping the log area the same height as on other sizes
+
+## 🎨 UI/UX Improvements
+
+- **The About page now adapts to available space** - When the window is both wide and tall enough, panels fill one screen and the log scrolls inside its own panel; when space is tight it switches to a single column with whole-page scrolling, so the changelog is always fully viewable at any window size
+- **Version bumped to v1.3.3**""",
+        "body_en": "",
+    },
+    # ------------------------------------------------------------------
+    # v1.3.2
+    # ------------------------------------------------------------------
+    {
+        "version": "v1.3.2",
+        "date": "2026-10-25",
+        "type": "优化版（Stable）",
+        "body_zh": """## ✨ 新增功能
+
+- **更新日志底部新增两个独立日志链接** - 分别跳转「原项目日志」（Allen-xxa/ComfyNexus）与「当前项目日志」（renxingblack/ComfyNexus），一眼区分两个仓库的更新记录
+
+## 🐛 问题修复
+
+- **修复「关于→更新日志」仅显示精简摘要、无法查看各版本完整内容** - 现改为直接渲染各版本的完整 Markdown 正文，与首次打开弹窗内容一致
+- **修复历史版本日志被折叠、默认不展开导致内容看不到** - 现各版本默认全部展开，所有标题与说明清晰可见
+- **修复「拖动窗口四角改变大小」失效** - 在 Windows 11 上按标题查找主窗口会先命中资源管理器的「标签页代理窗口」（同名、属于 explorer.exe），导致窗口样式与消息钩子全部施加到外部进程上并被系统拒绝，真实窗口因此丢失可缩放边框，四角拖拽彻底失效。现改为按「本进程 + 窗口类名」精确定位真实窗口，四角缩放恢复正常
+- **修复「重复启动时不激活已打开窗口」** - 同上根因，再次启动时会去激活资源管理器的同名窗口而非本程序；现按进程归属过滤，找不到本程序窗口时不激活任何外部窗口
+- **修复「系统监控悬浮窗位置偶尔错乱」** - 同上根因，悬浮窗的定位参照物可能取到别的进程窗口；现统一使用同一套精确定位
+
+## 🎨 界面优化
+
+- **「更新日志」改为版块内独立滚动** - 不再一次性铺满整页，与其他板块一起铺满当前窗口，长日志在版块内上下滚动查看
+- **「支持项目」「加入TG群组」版块缩放至合适大小** - 不再被拉伸放大，可完整显示在一个屏幕中
+- **版本更新至 v1.3.2**
+
+---
+
+## ✨ New Features
+
+- **Two separate changelog links at the bottom** - Jump to the "Original Project Log" (Allen-xxa/ComfyNexus) and the "Current Project Log" (renxingblack/ComfyNexus) respectively, so you can tell the two repositories' release notes apart at a glance
+
+## 🐛 Bug Fixes
+
+- **Fixed: "About → Changelog" only showed a brief summary and hid each version's full content** - It now renders each version's complete Markdown body, identical to the popup shown on first launch
+- **Fixed: history version logs were collapsed and hidden by default** - All versions now expand by default, so every heading and note is clearly visible
+- **Fixed: dragging the window corners to resize did not work** - On Windows 11, looking up the main window by title matches Explorer's tab proxy window first (same title, owned by explorer.exe), so window styles and message hooks were applied to a foreign process and rejected by the system; the real window thereby lost its resizable frame and corner dragging failed entirely. The real window is now located precisely by owning process plus window class, and corner resizing works again
+- **Fixed: relaunching did not bring the already-running window to front** - Same root cause; a second launch focused Explorer's look-alike window instead of this application. Results are now filtered by owning process, and no foreign window is activated when this application's window cannot be found
+- **Fixed: the system-monitor floating window occasionally appeared in the wrong place** - Same root cause; the positioning reference could resolve to another process's window. It now uses the same precise lookup
+
+## 🎨 UI/UX Improvements
+
+- **"Changelog" now scrolls inside its own panel** - It no longer fills the whole page; it shares the window with other panels, and long logs scroll vertically within the panel
+- **"Support Project" and "Join TG Group" panels scaled to a fitting size** - They are no longer stretched and fit entirely on one screen
+- **Version bumped to v1.3.2**""",
+        "body_en": "",
+    },
+    # ------------------------------------------------------------------
     # v1.3.1
     # ------------------------------------------------------------------
     {

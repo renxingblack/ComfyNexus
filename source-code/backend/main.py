@@ -1191,14 +1191,23 @@ def main():
             
             user32 = ctypes.windll.user32
             
-            # 重试机制：最多尝试 10 次，每次间隔 0.2 秒
+            # 重试机制：最多尝试 10 次，每次间隔 0.2 秒。
+            #
+            # **必须用权威解析，不能用 FindWindowW(None,"ComfyNexus")**：
+            # Win11 的 `Windows.Internal.Shell.TabProxyWindow`（explorer.exe 持有）
+            # 与本窗口标题相同，FindWindowW 会先命中它 → 钩子和 frameless 样式
+            # 全部施加到外部进程窗口上（跨进程 SetWindowLongPtrW 被拒），
+            # 本窗口则丢掉 WS_THICKFRAME → 四角拖拽缩放彻底失效。
+            # 实测证据见 window_bounds.resolve_app_hwnd 的注释。
+            from backend.src.utils.window_bounds import resolve_app_hwnd
+
             max_retries = 10
             retry_interval = 0.2
             hwnd = 0
             
             for attempt in range(max_retries):
                 time.sleep(retry_interval)
-                hwnd = user32.FindWindowW(None, "ComfyNexus")
+                hwnd = resolve_app_hwnd(refresh=(attempt > 0))
                 if hwnd and hwnd != 0:
                     break
             
@@ -1306,12 +1315,8 @@ def main():
         # 因为 create_window / maximize 过程中 Windows 可能重算样式并丢掉
         # WS_THICKFRAME，导致四角缩放静默失效。
         try:
-            from backend.src.utils.window_bounds import refresh_corner_resize
-            _hwnd = getattr(window, 'gui', None)
-            _hwnd = getattr(_hwnd, 'hwnd', None) if _hwnd else None
-            if not _hwnd:
-                import ctypes
-                _hwnd = ctypes.windll.user32.FindWindowW(None, "ComfyNexus")
+            from backend.src.utils.window_bounds import refresh_corner_resize, resolve_app_hwnd
+            _hwnd = resolve_app_hwnd(window)
             refresh_corner_resize(
                 _hwnd,
                 min_width=round(1024 * dpi_scale),
@@ -1346,12 +1351,12 @@ def main():
         
         if floating_window_needs_show:
             import ctypes
-            user32 = ctypes.windll.user32
-            
+            from backend.src.utils.window_bounds import resolve_app_hwnd
+
             max_retries = 5
             main_hwnd = 0
             for attempt in range(max_retries):
-                main_hwnd = user32.FindWindowW(None, "ComfyNexus")
+                main_hwnd = resolve_app_hwnd(window, refresh=(attempt > 0))
                 if main_hwnd and main_hwnd != 0:
                     break
                 time.sleep(0.1)

@@ -1,10 +1,10 @@
-; ComfyNexus v1.3.1 安装包脚本（Inno Setup 7）
+; ComfyNexus v1.3.3 安装包脚本（Inno Setup 7）
 ; 用法: ISCC.exe build_installer.iss
 ; 输入: dist\ComfyNexus\（PyInstaller COLLECT 产物）
-; 输出: 发布包\ComfyNexus-v1.3.1-setup.exe
+; 输出: 发布包\ComfyNexus-v1.3.3-setup.exe
 
 #define MyAppName "ComfyNexus"
-#define MyAppVersion "1.3.1"
+#define MyAppVersion "1.3.3"
 #define MyAppPublisher "ComfyNexus"
 #define MyAppExeName "ComfyNexus.exe"
 
@@ -28,7 +28,7 @@ DirExistsWarning=auto
 DefaultGroupName={#MyAppName}
 ; 应用本身需要管理员权限（硬件监控），安装器保持一致
 PrivilegesRequired=admin
-OutputDir=发布包
+OutputDir=D:\Downloads\ComfyNexus\发布包
 OutputBaseFilename=ComfyNexus-v{#MyAppVersion}-setup
 SetupIconFile=icon.ico
 Compression=lzma2/max

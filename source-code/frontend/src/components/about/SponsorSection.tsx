@@ -11,7 +11,7 @@ export function SponsorSection({ className }: SponsorSectionProps) {
   const { t } = useTranslation()
 
   return (
-    <Card className={cn('flex h-full flex-col p-5', className)}>
+    <Card className={cn('flex flex-col p-5', className)}>
       <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-foreground">
         <Heart className="size-4 text-danger" />
         {t('about.sponsor.title')}

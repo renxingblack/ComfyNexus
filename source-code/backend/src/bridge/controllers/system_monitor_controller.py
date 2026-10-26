@@ -132,9 +132,12 @@ class SystemMonitorController:
                     logger.info("[toggle_floating_window] 悬浮窗不存在，开始创建（hidden=True，等待前端就绪）...")
                     
                     if not floating_window_manager._main_hwnd:
-                        import ctypes
-                        user32 = ctypes.windll.user32
-                        main_hwnd = user32.FindWindowW(None, "ComfyNexus")
+                        # 必须用权威解析：FindWindowW 按标题会命中 Win11 的
+                        # Windows.Internal.Shell.TabProxyWindow（explorer.exe 持有），
+                        # 那样悬浮窗会贴着别人家的窗口定位。
+                        # 本控制器没有 window 引用，故传 None 走「按进程枚举」路径。
+                        from backend.src.utils.window_bounds import resolve_app_hwnd
+                        main_hwnd = resolve_app_hwnd()
                         if main_hwnd and main_hwnd != 0:
                             floating_window_manager.set_main_hwnd(main_hwnd)
                             logger.debug(f"[toggle_floating_window] 设置主窗口句柄: {main_hwnd}")

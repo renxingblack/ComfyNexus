@@ -127,6 +127,248 @@ if hasattr(_user32, "GetDpiForWindow"):
     _user32.GetDpiForWindow.argtypes = [wintypes.HWND]
     _user32.GetDpiForWindow.restype = wintypes.UINT
 
+# IsWindow（校验句柄是否仍然有效）
+_user32.IsWindow.argtypes = [wintypes.HWND]
+_user32.IsWindow.restype = wintypes.BOOL
+# GetWindowThreadProcessId（判断窗口属于哪个进程）
+_user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+_user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+# GetClassNameW
+_user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_user32.GetClassNameW.restype = ctypes.c_int
+# IsWindowVisible
+_user32.IsWindowVisible.argtypes = [wintypes.HWND]
+_user32.IsWindowVisible.restype = wintypes.BOOL
+
+# WNDENUMPROC 回调原型。
+# **必须显式声明**：64 位下若不设 argtypes，ctypes 会把回调参数按默认 int 截断，
+# EnumWindows 的回调会静默异常并立刻返回 FALSE —— 表现为「一个窗口都没枚举到」。
+# 上一版诊断脚本就是这样误判成「WebView2 用了 Composition 模式，没有子窗口」。
+_WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+_user32.EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
+_user32.EnumWindows.restype = wintypes.BOOL
+_user32.EnumChildWindows.argtypes = [wintypes.HWND, _WNDENUMPROC, wintypes.LPARAM]
+_user32.EnumChildWindows.restype = wintypes.BOOL
+
+_kernel32 = ctypes.WinDLL("kernel32")
+_kernel32.GetCurrentProcessId.argtypes = []
+_kernel32.GetCurrentProcessId.restype = wintypes.DWORD
+
+
+# ============================================================================
+# 权威窗口句柄解析（本轮关键修复）
+#
+# ## 踩到的根因
+#
+# 全项目原先有 17 处靠 `FindWindowW(None, "ComfyNexus")` 取窗口句柄，
+# 这个用法在 Windows 11 上是**错的**，而且错得非常隐蔽：
+#
+#   Win11 的「文件资源管理器标签化」会在 explorer.exe 里为每个顶层窗口创建一个
+#   伴生窗口 `Windows.Internal.Shell.TabProxyWindow`，它的**标题与目标窗口相同**。
+#   `FindWindowW(None, "ComfyNexus")` 只按标题匹配顶层窗口，枚举顺序上
+#   TabProxyWindow 先命中，于是返回的是 explorer.exe 的窗口：
+#
+#     实测（2026-10-25）：
+#       FindWindowW(None,'ComfyNexus') = 3738060
+#         class = Windows.Internal.Shell.TabProxyWindow
+#         pid   = 4288 (explorer.exe)        ← 不是本进程！
+#         rect  = (0,0,1920,935)  client=(1906,921)   ← 带 7px 边框
+#       真实窗口 = 4853078
+#         class = WindowsForms10.Window.8.app.0.15a303f_r3_ad1
+#         pid   = 15432 (ComfyNexus.exe)
+#         STYLE = 0x17010000  ← **没有 WS_THICKFRAME**
+#         rect  = (0,0,1920,1080)  client=(1920,1080)  ← 无边框
+#
+#   后果链条：
+#     1. `ensure_frameless_style()` 与钩子都作用在 explorer 的窗口上；
+#        跨进程 `SetWindowLongPtrW` 被 UIPI 拒绝 → 日志 `SetWindowLongPtrW 返回 0`；
+#     2. 真实窗口从未被施加 `WS_THICKFRAME`，而原生四角缩放**完全依赖**这个样式位；
+#     3. 于是「拖动四角改变大小」彻底失效 —— 正是用户反馈的现象。
+#
+#   为什么以前「看起来是好的」：旧机器/旧系统没有 TabProxyWindow，
+#   FindWindowW 恰好命中真实窗口。Win11 有了标签页代理后才暴露。
+#
+# ## 修复策略
+#
+# 不再信任「按标题猜窗口」，改为**按进程 ID + 窗口类名**精确锁定本进程的
+# WinForms 窗体。解析顺序：
+#   1. pywebview 的 `window.native.Handle`（最权威，直接就是 BrowserForm 句柄）
+#   2. 枚举本进程（GetCurrentProcessId）的顶层窗口，取 class 以 WindowsForms10 开头者
+#   3. `EnumChildWindows` 兜底（窗体被重新 parent 的情况）
+#   4. 最后才退回 FindWindowW，但**必须校验 pid 属于本进程**，否则弃用
+# ============================================================================
+
+# 解析结果的缓存：hwnd 在应用生命周期内不变，缓存可避免每次 API 调用都枚举。
+_cached_hwnd = 0
+
+
+def _pid_of(hwnd: int) -> int:
+    """取窗口所属进程 ID。"""
+    try:
+        pid = wintypes.DWORD(0)
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(pid.value)
+    except Exception:
+        return 0
+
+
+def _class_of(hwnd: int) -> str:
+    """取窗口类名。"""
+    try:
+        buf = ctypes.create_unicode_buffer(256)
+        _user32.GetClassNameW(hwnd, buf, 256)
+        return buf.value
+    except Exception:
+        return ""
+
+
+def _is_own_window(hwnd: int) -> bool:
+    """句柄是否有效且属于本进程。"""
+    if not hwnd:
+        return False
+    try:
+        if not _user32.IsWindow(hwnd):
+            return False
+        return _pid_of(hwnd) == int(_kernel32.GetCurrentProcessId())
+    except Exception:
+        return False
+
+
+def _to_int_handle(handle) -> int:
+    """把 pythonnet 的 `System.IntPtr` / 原生 int 统一转成 Python int。
+
+    为什么需要它：`window.native` 是 WinForms Form，`.Handle` 返回的是
+    pythonnet 的 `System.IntPtr`，不是一个干净的 int：
+      - `int(handle)` 在部分 pythonnet 版本上抛 TypeError；
+      - `handle.ToInt64()` 更可靠，但它不是标准 Python 对象的方法。
+    这里按「先试 ToInt64 → 再试 int → 最后试 .value」逐级兜底，
+    任何一步成功即返回，全部失败返回 0（调用方会继续用枚举兜底）。
+    """
+    if handle is None:
+        return 0
+    # 1) pythonnet IntPtr.ToInt64()
+    try:
+        to_int64 = getattr(handle, "ToInt64", None)
+        if callable(to_int64):
+            return int(to_int64())
+    except Exception:
+        pass
+    # 2) 直接 int()
+    try:
+        return int(handle)
+    except Exception:
+        pass
+    # 3) .value（某些包装类型）
+    try:
+        return int(handle.value)
+    except Exception:
+        pass
+    return 0
+
+
+def _find_own_top_level_window() -> int:
+    """枚举本进程的顶层窗口，返回最可能是主窗体的那个句柄。
+
+    判据：class 以 `WindowsForms10` 开头 + 可见 + 面积最大。
+    面积最大是为了在多窗口场景（比如浮窗）里挑出主窗体。
+    """
+    pid = int(_kernel32.GetCurrentProcessId())
+    candidates = []
+
+    @_WNDENUMPROC
+    def _cb(hwnd, _lparam):
+        try:
+            if _pid_of(hwnd) != pid:
+                return True
+            cls = _class_of(hwnd)
+            if not cls.startswith("WindowsForms10"):
+                return True
+            if not _user32.IsWindowVisible(hwnd):
+                return True
+            rect = get_window_rect(hwnd)
+            area = 0
+            if rect:
+                area = max(0, rect[2] - rect[0]) * max(0, rect[3] - rect[1])
+            candidates.append((area, hwnd, cls))
+        except Exception:
+            pass
+        return True
+
+    try:
+        _user32.EnumWindows(_cb, 0)
+    except Exception as exc:
+        logger.debug(f"[WindowBounds] 枚举本进程窗口失败: {exc}")
+        return 0
+
+    if not candidates:
+        return 0
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return int(candidates[0][1])
+
+
+def resolve_app_hwnd(window=None, refresh: bool = False) -> int:
+    """取**本应用真实主窗口**的句柄（权威实现）。
+
+    绝对不要再用裸的 `FindWindowW(None, "ComfyNexus")` —— 理由见本段上方注释。
+
+    Args:
+        window: pywebview 的 Window 对象（可选）。传入时优先用它的 native.Handle，
+                这是最权威的来源，且不依赖任何窗口枚举。
+        refresh: 忽略缓存，强制重新解析。
+
+    Returns:
+        窗口句柄；解析失败返回 0。
+    """
+    global _cached_hwnd
+
+    # 1) pywebview 原生句柄（最可靠）
+    if window is not None:
+        try:
+            native = getattr(window, "native", None)
+            if native is not None:
+                handle = getattr(native, "Handle", None)
+                hwnd = _to_int_handle(handle)
+                if hwnd and _is_own_window(hwnd):
+                    _cached_hwnd = hwnd
+                    return hwnd
+        except Exception as exc:
+            logger.debug(f"[WindowBounds] 读取 window.native.Handle 失败: {exc}")
+
+    # 2) 缓存（仍有效则直接用）
+    if not refresh and _cached_hwnd and _is_own_window(_cached_hwnd):
+        return _cached_hwnd
+
+    # 3) 按进程 + 类名枚举
+    hwnd = _find_own_top_level_window()
+    if hwnd:
+        _cached_hwnd = hwnd
+        logger.debug(f"[WindowBounds] 解析到主窗口 hwnd={hwnd}（按进程枚举）")
+        return hwnd
+
+    # 4) 兜底：FindWindowW，但必须校验属于本进程
+    try:
+        fallback = _user32.FindWindowW(None, "ComfyNexus")
+        if _is_own_window(fallback):
+            _cached_hwnd = int(fallback)
+            logger.debug(f"[WindowBounds] 解析到主窗口 hwnd={fallback}（FindWindowW 兜底）")
+            return int(fallback)
+        if fallback:
+            logger.warning(
+                f"[WindowBounds] FindWindowW 命中的窗口 {fallback} 不属于本进程"
+                f"（pid={_pid_of(fallback)}, class={_class_of(fallback)!r}），已丢弃。"
+                f"这是 Win11 TabProxyWindow 干扰，属于预期情况。"
+            )
+    except Exception as exc:
+        logger.debug(f"[WindowBounds] FindWindowW 兜底失败: {exc}")
+
+    return 0
+
+
+def invalidate_hwnd_cache():
+    """清空句柄缓存（窗口重建 / 退出时调用）。"""
+    global _cached_hwnd
+    _cached_hwnd = 0
+
 
 # ============================================================================
 # 核心函数

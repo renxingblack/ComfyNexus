@@ -112,7 +112,11 @@ def _find_dotnet_root() -> Optional[Path]:
         return bundled
 
     # 3. 系统安装的 .NET
-    system_dotnet = Path(os.environ.get("ProgramFiles", os.path.join(os.environ.get("SystemDrive", "C:"), "Program Files"))) / "dotnet"
+    # 注意：不能用 os.path.join(SystemDrive, "Program Files") 兜底，
+    # 因为 Windows 上 os.path.join("C:", "Program Files") 不补反斜杠，
+    # 会拼出畸形路径 "C:Program Files\dotnet" 导致加载失败。
+    # 直接用标准 Windows 安装路径兜底。
+    system_dotnet = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "dotnet"
     if system_dotnet.exists():
         # 必须同时有 NETCore.App 和 WindowsDesktop.App 的 8.x 版本
         desktop_app = system_dotnet / "shared" / "Microsoft.WindowsDesktop.App"
