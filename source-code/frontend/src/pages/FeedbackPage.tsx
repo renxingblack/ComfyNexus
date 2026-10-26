@@ -259,7 +259,9 @@ ${formData.additionalInfo || t('common.placeholder.none')}
       labels: labelMap[formData.type]
     })
 
-    return `https://github.com/Allen-xxa/ComfyNexus/issues/new?${params.toString()}`
+    // 提交到**本项目**仓库（renxingblack/ComfyNexus），
+    // 不是原作者仓库（Allen-xxa/ComfyNexus）—— 后者与本项目的 issue 跟踪无关。
+    return `https://github.com/renxingblack/ComfyNexus/issues/new?${params.toString()}`
   }
 
   // 提交反馈

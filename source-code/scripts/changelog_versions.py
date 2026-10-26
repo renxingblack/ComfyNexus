@@ -22,6 +22,38 @@ ComfyNexus 自有版本更新日志（v1.2.6 → v1.3.1）
 # 顺序：最新在前
 VERSIONS = [
     # ------------------------------------------------------------------
+    # v1.3.4
+    # ------------------------------------------------------------------
+    {
+        "version": "v1.3.4",
+        "date": "2026-10-26",
+        "type": "功能版（Stable）",
+        "body_zh": """## ✨ 新增功能
+
+- **卸载时可选择是否清除所有本地数据** - 卸载时会询问一次：选择「是」则一并清除配置文件、提示词、画廊图片、对话数据库、插件与模型库缓存、下载缓存和运行日志；选择「否」则仅卸载程序本体，数据全部保留，重新安装后可直接沿用
+- **清除数据时保护 ComfyUI 环境与模型** - 自动读取已配置的环境目录与模型目录，无论它们位于安装目录之内还是之外，都不会被删除；即使 ComfyUI 装在安装目录里的子文件夹中，也只保留该文件夹、其余数据照常清理
+- **清除数据时保护安装目录中的其它软件** - 只删除本程序自己生成的文件，同一目录下属于其它软件的文件与文件夹一律保留；安装目录本身只有在完全空了之后才会被移除
+
+## 🐛 问题修复
+
+- **修复「问题反馈」的提交地址指向原作者仓库** - 现在提交到本项目仓库，提交后能在正确的项目里跟进
+- **版本更新至 v1.3.4**
+
+---
+
+## ✨ New Features
+
+- **Choose whether to wipe all local data during uninstall** - The uninstaller now asks once. Choosing Yes also removes settings, prompts, gallery images, the conversation database, plugin and model-library caches, download cache and logs; choosing No removes only the program itself and keeps every bit of data, ready to reuse after reinstalling
+- **ComfyUI environments and models are protected when clearing data** - Configured environment and model folders are read automatically and never deleted, whether they sit inside the install directory or elsewhere; even when ComfyUI lives in a subfolder of the install directory, only that subfolder is preserved while the rest is still cleaned
+- **Other software sharing the install directory is protected** - Only files created by this program are removed; anything belonging to other software in the same directory is kept, and the install directory itself is removed only once it is completely empty
+
+## 🐛 Bug Fixes
+
+- **Fixed: the feedback submission link pointed at the original author's repository** - Reports now go to this project's repository, so they can be tracked in the right place
+- **Version bumped to v1.3.4**""",
+        "body_en": "",
+    },
+    # ------------------------------------------------------------------
     # v1.3.3
     # ------------------------------------------------------------------
     {

@@ -1,10 +1,10 @@
-; ComfyNexus v1.3.3 安装包脚本（Inno Setup 7）
+; ComfyNexus v1.3.4 安装包脚本（Inno Setup 7）
 ; 用法: ISCC.exe build_installer.iss
 ; 输入: dist\ComfyNexus\（PyInstaller COLLECT 产物）
-; 输出: 发布包\ComfyNexus-v1.3.3-setup.exe
+; 输出: 发布包\ComfyNexus-v1.3.4-setup.exe
 
 #define MyAppName "ComfyNexus"
-#define MyAppVersion "1.3.3"
+#define MyAppVersion "1.3.4"
 #define MyAppPublisher "ComfyNexus"
 #define MyAppExeName "ComfyNexus.exe"
 
@@ -44,7 +44,7 @@ VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
 UninstallDisplayIcon={app}\{#MyAppExeName}
-; 卸载时保留用户数据目录（data/logs/config/cache）
+; 卸载器自身放在 {app}\uninst，卸载结束时由 [UninstallDelete] 清掉
 UninstallFilesDir={app}\uninst
 
 [Languages]
@@ -68,5 +68,104 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
-; 卸载后清理运行时生成的空壳目录（用户数据 data/logs/config/cache 默认保留）
+; 1) 卸载器自身目录（含 unins000.exe/.dat）
 Type: filesandordirs; Name: "{app}\uninst"
+; 2) 仅当 {app} 已经空了才移除目录本身 —— 用户把程序装进混用目录时，
+;    别人还有文件在里面，这一步会自动跳过（dirifempty 只删空目录）
+Type: dirifempty; Name: "{app}"
+
+[Code]
+#include "scripts\uninstall_clear_data.issinc"
+
+var
+  CNX_ClearDataApproved: Boolean;
+  CNX_ClearDataReport: String;
+
+{ 卸载器命令行里是否有某个参数（供自动化/无人值守显式指定，忽略大小写） }
+function CNX_CmdParamExists(const Param: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), Param) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+{ ────────────────────────────────────────────────────────────────────────
+  卸载开始时询问「是否清除所有数据」
+  ────────────────────────────────────────────────────────────────────────
+  · 默认按钮是「否」，用户手快直接回车也不会删数据
+  · 静默卸载（/SILENT、/VERYSILENT）一律按「否」处理，符合无人值守预期
+  · 自动化脚本可用 /CLEARDATA 显式要求清除
+}
+function InitializeUninstall(): Boolean;
+var
+  Answer: Integer;
+begin
+  CNX_ClearDataApproved := False;
+  CNX_ClearDataReport := '';
+
+  if UninstallSilent() then
+  begin
+    if CNX_CmdParamExists('/CLEARDATA') then
+      CNX_ClearDataApproved := True;
+    Result := True;
+    Exit;
+  end;
+
+  if CNX_CmdParamExists('/CLEARDATA') then
+  begin
+    CNX_ClearDataApproved := True;
+    Result := True;
+    Exit;
+  end;
+
+  Answer := MsgBox(
+    '是否同时清除 ComfyNexus 的所有本地数据？' + #13#10 + #13#10 +
+    '选择「是」将删除安装目录下由本程序生成的内容：' + #13#10 +
+    '    配置文件（含已添加的 ComfyUI 环境与模型路径记录）' + #13#10 +
+    '    提示词、画廊图片、对话数据库' + #13#10 +
+    '    插件、模型库、下载缓存、运行日志' + #13#10 + #13#10 +
+    '无论选择哪一项，以下内容都不会被删除：' + #13#10 +
+    '    · 您已配置的 ComfyUI 环境目录与模型目录' + #13#10 +
+    '    · 安装目录中其它软件的文件' + #13#10 + #13#10 +
+    '选择「否」则仅卸载程序本体，保留全部本地数据，下次安装可直接沿用。',
+    mbConfirmation, MB_YESNO or MB_DEFBUTTON2);
+
+  CNX_ClearDataApproved := (Answer = IDYES);
+  Result := True;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    if CNX_ClearDataApproved then
+    begin
+      { 此刻安装目录里的程序文件还在，指纹校验才有依据；
+        必须在卸载器自己开始删文件之前（usUninstall）执行 }
+      CNX_ClearDataReport := CNX_ClearAppData(ExpandConstant('{app}'));
+      Log(CNX_ClearDataReport);
+
+      { 排一个「脱离本进程」的收尾脚本：卸载器删不掉正在运行的自己
+        （uninst\unins000.exe 被占用 → 目录非空 → dirifempty 失效），
+        独立目录卸载后会残留一个只装着卸载器的 uninst。
+        该脚本等卸载器退出后再清 uninst，并且只有安装目录已经空了才删目录本身，
+        所以混用目录依旧安全。必须用 ewNoWait 异步启动，否则会挡住我们退出。 }
+      if CNX_ScheduleUninstallerCleanup(ExpandConstant('{app}')) then
+        Log('[ComfyNexus] 已排入卸载器收尾清理脚本')
+      else
+        Log('[ComfyNexus] 收尾清理脚本生成失败，uninst 目录可能残留');
+    end;
+  end
+
+  { 注意：绝不能在 usPostUninstall 里同步清 uninst 目录！
+    卸载器还需往该目录写 _unins-done.tmp 等收尾标记，提前清空会让它
+    在收尾阶段崩溃，导致「程序本体已删但收尾没做完」的坏状态
+    （实测：日志停在 Creating "_unins-done.tmp"，exe/version.json 反而不删）。
+    清理交给上面那个外部脚本，它在卸载器进程退出之后才动手。 }
+end;

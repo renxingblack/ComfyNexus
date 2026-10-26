@@ -1,0 +1,749 @@
+(*
+  ComfyNexus 卸载「清除所有数据」逻辑（Inno Setup 7 / Pascal Script）
+
+  ── 为什么不能简单 DelTree(<安装目录>) ────────────────────────────────────────
+  用户很可能把程序装进 D:\Program 这种**与其它软件混用**的目录。
+  整目录强删会连别人的文件一起清掉，这是不可接受的。
+  本文件因此采用「条目级白名单 + 指纹校验 + 保护区」三层防护。
+
+  ── 三层防护 ─────────────────────────────────────────────────────────────
+  第 1 层｜条目级白名单
+      只删本程序自己生成、**名字固定**的子项（如 data\ai_assistant.db、
+      cache\plugins、logs\comfynexus_*.log）。
+      **绝不整目录删 data / config / logs / cache** —— 这些名字太通用，
+      混用目录下可能原本就有，里面是别人的东西。
+  第 2 层｜指纹校验
+      白名单里的顶层名字（data、tools、download…）同样通用。
+      删除前必须确认里面能找到本程序的特征文件；找不到就整个跳过。
+  第 3 层｜ComfyUI 保护区
+      从 config\environments.json 抽出**所有绝对路径**（环境目录、模型目录、
+      python 路径…），这些子树一律不删，且支持嵌套在 data\ 里时只保留该子树、
+      其余照常清理。
+  另外：目录联接/符号链接不跟随；静默卸载一律按「否」；删完只移除空目录。
+
+  ── 挂载点 ────────────────────────────────────────────────────────────────
+  InitializeUninstall()                      → 询问用户，记录 CNX_ClearDataApproved
+  CurUninstallStepChanged(usUninstall)       → 执行 CNX_ClearAppData
+                                               （此刻程序文件还在，指纹校验才有依据）
+*)
+
+
+{ kernel32: 标记文件在重启后删除（用于卸载器删自己） }
+function MoveFileExW(lpExistingFileName: String; lpNewFileName: String;
+                     dwFlags: LongWord): BOOL;
+  external 'MoveFileExW@kernel32.dll stdcall';
+
+const
+  MOVEFILE_DELAY_UNTIL_REBOOT = $4;
+
+const
+  CNX_ATTR_DIR      = $10;
+  CNX_ATTR_REPARSE  = $400;
+  CNX_INVALID_ATTRS = $FFFFFFFF;
+  CNX_NL            = #13#10;
+
+{ Inno Setup 没有内置读取文件属性，只能直接调 kernel32。
+  GetFileAttributesW 是 Unicode 版本，与 Inno 7 的 String 类型匹配；
+  INVALID_FILE_ATTRIBUTES($FFFFFFFF) 表示路径不存在或无权限。 }
+function CNX_GetFileAttributesW(lpFileName: String): LongWord;
+  external 'GetFileAttributesW@kernel32.dll stdcall';
+
+{ ────────────────────────── 基础工具 ────────────────────────── }
+
+function CNX_TrimSlash(const S: String): String;
+begin
+  Result := S;
+  while (Length(Result) > 3) and ((Result[Length(Result)] = '\') or (Result[Length(Result)] = '/')) do
+    SetLength(Result, Length(Result) - 1);
+end;
+
+function CNX_Norm(const S: String): String;
+begin
+  Result := Lowercase(CNX_TrimSlash(S));
+end;
+
+{ Child 是否等于 Parent，或位于 Parent 之内（大小写不敏感） }
+function CNX_Inside(const Child, Parent: String): Boolean;
+var
+  C, P: String;
+begin
+  Result := False;
+  C := CNX_Norm(Child);
+  P := CNX_Norm(Parent);
+  if (C = '') or (P = '') then
+    Exit;
+  if C = P then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if Length(C) > Length(P) then
+    if Copy(C, 1, Length(P) + 1) = P + '\' then
+      Result := True;
+end;
+
+function CNX_Add(var A: TArrayOfString; const S: String): Integer;
+var
+  n: Integer;
+begin
+  n := GetArrayLength(A);
+  SetArrayLength(A, n + 1);
+  A[n] := S;
+  Result := n + 1;
+end;
+
+{ 目标目录是否为「重解析点」（junction / 符号链接）。
+  这种目录背后指向别处，跟着删会误伤目标位置，一律不碰。 }
+function CNX_IsReparsePoint(const Dir: String): Boolean;
+var
+  Attr: LongWord;
+begin
+  Result := False;
+  if not DirExists(Dir) then
+    Exit;
+  Attr := CNX_GetFileAttributesW(Dir);
+  if Attr = CNX_INVALID_ATTRS then
+    Exit;
+  Result := (Attr and CNX_ATTR_REPARSE) <> 0;
+end;
+
+{ '|' 分隔列表里的某个元素是否匹配 Name。
+  元素支持一个 '*' 通配（如 comfynexus_*.log），用于日志这类带时间戳的文件。 }
+function CNX_NameMatches(const Name, Patterns: String): Boolean;
+var
+  P, Star: Integer;
+  One, Rest, Pre, Suf: String;
+begin
+  Result := False;
+  Rest := Patterns;
+  while Rest <> '' do
+  begin
+    P := Pos('|', Rest);
+    if P > 0 then
+    begin
+      One := Copy(Rest, 1, P - 1);
+      Rest := Copy(Rest, P + 1, Length(Rest));
+    end
+    else
+    begin
+      One := Rest;
+      Rest := '';
+    end;
+    if One <> '' then
+    begin
+      if CompareText(One, Name) = 0 then
+      begin
+        Result := True;
+        Exit;
+      end;
+      Star := Pos('*', One);
+      if Star > 0 then
+      begin
+        Pre := Copy(One, 1, Star - 1);
+        Suf := Copy(One, Star + 1, Length(One));
+        if (Length(Name) >= Length(Pre) + Length(Suf))
+           and (CompareText(Copy(Name, 1, Length(Pre)), Pre) = 0)
+           and (CompareText(Copy(Name, Length(Name) - Length(Suf) + 1, Length(Suf)), Suf) = 0) then
+        begin
+          Result := True;
+          Exit;
+        end;
+      end;
+    end;
+  end;
+end;
+
+{ ────────────────────────── ComfyUI 保护区 ────────────────────────── }
+
+{ 从 environments.json 里抽出所有「像绝对路径」的字符串作为保护区。
+  按「字符串字面量 + 盘符/UNC 特征」提取，而不是按字段名逐个取，
+  这样 path / basePath / paths 的每个值 / desktopDataPath / pythonPath
+  全部覆盖，前后端字段名以后再变也不会漏。 }
+function CNX_ExtractProtectedPaths(const JsonText: String; var Paths: TArrayOfString): Integer;
+var
+  i, StartPos, EndPos, n: Integer;
+  Raw, Val: String;
+begin
+  SetArrayLength(Paths, 0);
+  n := 0;
+  i := 1;
+  while i <= Length(JsonText) do
+  begin
+    if JsonText[i] = '"' then
+    begin
+      StartPos := i + 1;
+      EndPos := 0;
+      i := i + 1;
+      while i <= Length(JsonText) do
+      begin
+        if JsonText[i] = '\' then
+          i := i + 2          { 跳过转义对 \" \\ \u 等 }
+        else if JsonText[i] = '"' then
+        begin
+          EndPos := i - 1;
+          Break;
+        end
+        else
+          i := i + 1;
+      end;
+      if EndPos >= StartPos then
+      begin
+        Val := Copy(JsonText, StartPos, EndPos - StartPos + 1);
+        Raw := Val;
+        StringChangeEx(Raw, '\\', '\', True);     { JSON 里 D:\\Models }
+        StringChangeEx(Raw, '\/', '/', True);
+        Raw := CNX_TrimSlash(Raw);
+        { 只要盘符路径（D:\...）或 UNC（\\server\share） }
+        if (Pos(':\', Raw) > 0) or (Copy(Raw, 1, 2) = '\\') then
+          if FileExists(Raw) or DirExists(Raw) then
+            n := CNX_Add(Paths, Raw);
+      end;
+      i := i + 1;
+    end
+    else
+      i := i + 1;
+  end;
+  Result := n;
+end;
+
+{ Candidate 是否落在任一保护路径之内（含相等） }
+function CNX_HitProtected(const Candidate: String; const ProtPaths: TArrayOfString): Boolean;
+var
+  k, m: Integer;
+begin
+  Result := False;
+  m := GetArrayLength(ProtPaths);
+  for k := 0 to m - 1 do
+    if CNX_Inside(Candidate, ProtPaths[k]) then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+{ ────────────────────────── 指纹校验 ────────────────────────── }
+
+function CNX_HasAnyFile(const Dir: String; const Names: String): Boolean;
+var
+  P: Integer;
+  One, Rest: String;
+begin
+  Result := False;
+  Rest := Names;
+  while Rest <> '' do
+  begin
+    P := Pos('|', Rest);
+    if P > 0 then
+    begin
+      One := Copy(Rest, 1, P - 1);
+      Rest := Copy(Rest, P + 1, Length(Rest));
+    end
+    else
+    begin
+      One := Rest;
+      Rest := '';
+    end;
+    if (One <> '') and FileExists(Dir + '\' + One) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+function CNX_HasAnyDir(const Dir: String; const Names: String): Boolean;
+var
+  P: Integer;
+  One, Rest: String;
+begin
+  Result := False;
+  Rest := Names;
+  while Rest <> '' do
+  begin
+    P := Pos('|', Rest);
+    if P > 0 then
+    begin
+      One := Copy(Rest, 1, P - 1);
+      Rest := Copy(Rest, P + 1, Length(Rest));
+    end
+    else
+    begin
+      One := Rest;
+      Rest := '';
+    end;
+    if (One <> '') and DirExists(Dir + '\' + One) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+function CNX_HasAppLog(const Dir: String): Boolean;
+var
+  FR: TFindRec;
+begin
+  Result := False;
+  if FindFirst(Dir + '\comfynexus_*.log', FR) then
+  begin
+    Result := (FR.Attributes and CNX_ATTR_DIR) = 0;
+    FindClose(FR);
+  end;
+end;
+
+{ 顶层项是否确实是本程序建的 —— 认不出来就不删 }
+function CNX_OwnedByApp(const Name, Dir: String): Boolean;
+var
+  N: String;
+begin
+  Result := False;
+  N := Lowercase(Name);
+  if N = '_internal' then
+    Result := CNX_HasAnyFile(Dir, 'comfy_nexus_version.py|base_library.zip|python313.dll|pyi-windows-manifest-filename.txt')
+  else if N = 'tools' then
+    Result := CNX_HasAnyDir(Dir, 'mingit')
+              or CNX_HasAnyFile(Dir, '7zr.exe|aria2c.exe')
+  else if N = 'data' then
+    Result := CNX_HasAnyFile(Dir, 'ai_assistant.db|system_prompts.json|active_system_prompts.json|snapshot_metadata.json|core_nodes.json')
+              or CNX_HasAnyDir(Dir, 'gallery|prompt|workflows')
+  else if N = 'cache' then
+    Result := CNX_HasAnyFile(Dir, 'bilibili_updates.json')
+              or CNX_HasAnyDir(Dir, 'plugins|marketplace|model_library|updates|ai_models|icons|mingit')
+  else if N = 'config' then
+    Result := CNX_HasAnyFile(Dir, 'settings.json|environments.json|default_config.json|modules.json')
+  else if N = 'logs' then
+    Result := CNX_HasAppLog(Dir)
+  else if N = 'download' then
+    Result := CNX_HasAnyFile(Dir, '.manifest.json')
+  else if N = 'lora_data' then
+    Result := CNX_HasAnyDir(Dir, 'preview')
+              or CNX_HasAnyFile(Dir, 'lora_index.json')
+  else if N = '.mingit_migrated' then
+    Result := FileExists(Dir)
+  else
+    Result := False;
+end;
+
+{ ────────────────────────── 删除引擎 ────────────────────────── }
+
+{
+  整棵删除 Dir（仅用于 100% 属于本程序的子树，如 _internal、download、
+  data\gallery、cache\plugins）。逐层下钻，遇到保护区子树整棵留下。
+  返回：0 = 全删净；1 = 有保留项；2 = 有删不掉的（被占用）
+}
+function CNX_PurgeTree(const Dir: String; const ProtPaths: TArrayOfString;
+                       var Report: String; var DelCount, KeepCount, FailCount: Integer): Integer;
+var
+  FR: TFindRec;
+  Child: String;
+  Rc: Integer;
+  HadKeep, HadFail: Boolean;
+begin
+  Result := 0;
+  HadKeep := False;
+  HadFail := False;
+
+  if CNX_IsReparsePoint(Dir) then
+  begin
+    Report := Report + 'KEEP   ' + Dir + '  (目录联接/符号链接，不跟随)' + CNX_NL;
+    KeepCount := KeepCount + 1;
+    Result := 1;
+    Exit;
+  end;
+
+  if FindFirst(Dir + '\*', FR) then
+  begin
+    try
+      repeat
+        if (FR.Name <> '.') and (FR.Name <> '..') then
+        begin
+          Child := Dir + '\' + FR.Name;
+          { 保护区优先：不管文件还是目录，命中就不碰 }
+          if CNX_HitProtected(Child, ProtPaths) then
+          begin
+            Report := Report + 'KEEP   ' + Child + '  (ComfyUI 环境/模型路径，已保护)' + CNX_NL;
+            KeepCount := KeepCount + 1;
+            HadKeep := True;
+          end
+          else if (FR.Attributes and CNX_ATTR_DIR) <> 0 then
+          begin
+            Rc := CNX_PurgeTree(Child, ProtPaths, Report, DelCount, KeepCount, FailCount);
+            if Rc = 0 then
+              RemoveDir(Child)
+            else
+            begin
+              HadKeep := True;
+              if Rc = 2 then
+                HadFail := True;
+            end;
+          end
+          else if DeleteFile(Child) then
+            DelCount := DelCount + 1
+          else
+          begin
+            Report := Report + 'FAIL   ' + Child + '  (文件被占用)' + CNX_NL;
+            FailCount := FailCount + 1;
+            HadFail := True;
+          end;
+        end;
+      until not FindNext(FR);
+    finally
+      FindClose(FR);
+    end;
+  end;
+
+  if HadFail then
+    Result := 2
+  else if HadKeep then
+    Result := 1
+  else
+    Result := 0;
+end;
+
+{
+  **条目级**清理（用于 data / cache / config / logs / tools / lora_data）。
+  只处理名字命中白名单的子项；其余一律保留并记一笔。
+  子项若是目录，则整棵删（因为它是本程序独占的子目录，如 data\gallery）。
+  返回：0 = 目录已删净；1 = 还有保留项；2 = 有删不掉的
+}
+function CNX_PurgeEntries(const Dir, Allowed: String; const ProtPaths: TArrayOfString;
+                          var Report: String; var DelCount, KeepCount, FailCount: Integer): Integer;
+var
+  FR: TFindRec;
+  Child: String;
+  Rc: Integer;
+  HadKeep, HadFail: Boolean;
+begin
+  Result := 0;
+  HadKeep := False;
+  HadFail := False;
+
+  if FindFirst(Dir + '\*', FR) then
+  begin
+    try
+      repeat
+        if (FR.Name <> '.') and (FR.Name <> '..') then
+        begin
+          Child := Dir + '\' + FR.Name;
+          if CNX_HitProtected(Child, ProtPaths) then
+          begin
+            Report := Report + 'KEEP   ' + Child + '  (ComfyUI 环境/模型路径，已保护)' + CNX_NL;
+            KeepCount := KeepCount + 1;
+            HadKeep := True;
+          end
+          else if not CNX_NameMatches(FR.Name, Allowed) then
+          begin
+            { 不在白名单里 → 别人的东西，保留 }
+            Report := Report + 'KEEP   ' + Child + '  (非本程序文件，保留)' + CNX_NL;
+            KeepCount := KeepCount + 1;
+            HadKeep := True;
+          end
+          else if (FR.Attributes and CNX_ATTR_DIR) <> 0 then
+          begin
+            Rc := CNX_PurgeTree(Child, ProtPaths, Report, DelCount, KeepCount, FailCount);
+            if Rc = 0 then
+            begin
+              RemoveDir(Child);
+              DelCount := DelCount + 1;
+            end
+            else
+            begin
+              HadKeep := True;
+              if Rc = 2 then
+                HadFail := True;
+            end;
+          end
+          else if DeleteFile(Child) then
+            DelCount := DelCount + 1
+          else
+          begin
+            Report := Report + 'FAIL   ' + Child + '  (文件被占用)' + CNX_NL;
+            FailCount := FailCount + 1;
+            HadFail := True;
+          end;
+        end;
+      until not FindNext(FR);
+    finally
+      FindClose(FR);
+    end;
+  end;
+
+  if HadFail then
+    Result := 2
+  else if HadKeep then
+    Result := 1
+  else
+    Result := 0;
+end;
+
+{ ────────────────────────── 主体 ────────────────────────── }
+
+{ 安装目录是否确实是本程序的（防止路径被指到别处时误删） }
+function CNX_IsPlausibleAppDir(const Root: String): Boolean;
+var
+  R: String;
+begin
+  Result := False;
+  R := CNX_TrimSlash(Root);
+  if R = '' then
+    Exit;
+  { 盘符根 / 系统关键目录一律拒绝 }
+  if Length(R) <= 3 then
+    Exit;
+  if CNX_Inside(ExpandConstant('{win}'), R) then
+    Exit;
+  if CNX_Inside(ExpandConstant('{sys}'), R) then
+    Exit;
+  if CNX_Inside(ExpandConstant('{userappdata}'), R) then
+    Exit;
+  if CNX_Inside(ExpandConstant('{localappdata}'), R) then
+    Exit;
+  { 必须能找到本程序的痕迹 }
+  Result :=
+    FileExists(R + '\ComfyNexus.exe')
+    or FileExists(R + '\version.json')
+    or FileExists(R + '\_internal\comfy_nexus_version.py')
+    or FileExists(R + '\_internal\base_library.zip')
+    or FileExists(R + '\_internal\python313.dll');
+end;
+
+{
+  返回给人看的执行报告（同时由调用方写入卸载日志）。
+  调用时机：CurUninstallStepChanged(usUninstall) —— 此时程序文件尚未被删除，
+  指纹校验才有东西可查。
+}
+function CNX_ClearAppData(const AppDir: String): String;
+var
+  Root, EnvJsonPath, Report, Target, Name, Restricted: String;
+  JsonRaw: AnsiString;
+  Top, ProtPaths: TArrayOfString;
+  i, n, pn, Rc: Integer;
+  DelCount, KeepCount, FailCount, NotFoundCount: Integer;
+begin
+  Report := '';
+  DelCount := 0;
+  KeepCount := 0;
+  FailCount := 0;
+  NotFoundCount := 0;
+  Root := CNX_TrimSlash(AppDir);
+
+  if not CNX_IsPlausibleAppDir(Root) then
+  begin
+    Result := '[ComfyNexus] 安装目录未发现本程序特征，已放弃清除数据：' + Root;
+    Exit;
+  end;
+
+  { ── 保护区：先把 environments.json 读进内存，后面 config 会被清理 ──
+    Inno 7 的 LoadStringFromFile 第二个参数是 AnsiString（原始字节），
+    environments.json 是 UTF-8，必须经 Utf8Decode 才能拿到正确的中文路径。 }
+  EnvJsonPath := Root + '\config\environments.json';
+  SetArrayLength(ProtPaths, 0);
+  if FileExists(EnvJsonPath) then
+  begin
+    JsonRaw := '';
+    if LoadStringFromFile(EnvJsonPath, JsonRaw) then
+      pn := CNX_ExtractProtectedPaths(Utf8Decode(JsonRaw), ProtPaths)
+    else
+      pn := 0;
+    if pn > 0 then
+      Report := Report + 'INFO   已识别 ' + IntToStr(pn) + ' 个 ComfyUI 环境/模型路径，全部保护' + CNX_NL;
+  end;
+
+  { ── 顶层白名单：只有这些名字的子项才可能被清理 ── }
+  SetArrayLength(Top, 0);
+  CNX_Add(Top, '_internal');
+  CNX_Add(Top, 'tools');
+  CNX_Add(Top, 'data');
+  CNX_Add(Top, 'cache');
+  CNX_Add(Top, 'config');
+  CNX_Add(Top, 'logs');
+  CNX_Add(Top, 'download');
+  CNX_Add(Top, 'lora_data');
+  CNX_Add(Top, '.mingit_migrated');
+
+  n := GetArrayLength(Top);
+  for i := 0 to n - 1 do
+  begin
+    Name := Top[i];
+    Target := Root + '\' + Name;
+
+    if not (DirExists(Target) or FileExists(Target)) then
+    begin
+      NotFoundCount := NotFoundCount + 1;
+      Continue;
+    end;
+
+    { 重解析点不跟删 }
+    if CNX_IsReparsePoint(Target) then
+    begin
+      Report := Report + 'KEEP   ' + Target + '  (目录联接/符号链接，不跟随)' + CNX_NL;
+      KeepCount := KeepCount + 1;
+      Continue;
+    end;
+
+    { 指纹不符 → 不是我建的东西，不删 }
+    if not CNX_OwnedByApp(Name, Target) then
+    begin
+      Report := Report + 'KEEP   ' + Target + '  (未发现本程序特征，疑似混用目录内容)' + CNX_NL;
+      KeepCount := KeepCount + 1;
+      Continue;
+    end;
+
+    { 单文件（.mingit_migrated） }
+    if not DirExists(Target) then
+    begin
+      if CNX_HitProtected(Target, ProtPaths) then
+      begin
+        Report := Report + 'KEEP   ' + Target + '  (受保护的路径)' + CNX_NL;
+        KeepCount := KeepCount + 1;
+      end
+      else if DeleteFile(Target) then
+      begin
+        Report := Report + 'DELETE ' + Target + CNX_NL;
+        DelCount := DelCount + 1;
+      end
+      else
+      begin
+        Report := Report + 'FAIL   ' + Target + '  (文件被占用)' + CNX_NL;
+        FailCount := FailCount + 1;
+      end;
+      Continue;
+    end;
+
+    { 目录：按「独占子树」或「条目白名单」两种策略清理 }
+
+    if Name = '_internal' then
+    begin
+      { PyInstaller 产物，100% 属于本程序 }
+      Rc := CNX_PurgeTree(Target, ProtPaths, Report, DelCount, KeepCount, FailCount);
+    end
+    else if Name = 'download' then
+    begin
+      { 统一下载缓存，整个目录都是本程序建的 }
+      Rc := CNX_PurgeTree(Target, ProtPaths, Report, DelCount, KeepCount, FailCount);
+    end
+    else
+    begin
+      { 名字通用 → 只删自己那几个条目，别人的东西原样保留 }
+      if Name = 'tools' then
+        Restricted := 'mingit|7zr.exe|aria2c.exe'
+      else if Name = 'data' then
+        Restricted := 'ai_assistant.db|ai_assistant.db-wal|ai_assistant.db-shm' +
+                      '|system_prompts.json|active_system_prompts.json' +
+                      '|snapshot_metadata.json|core_nodes.json' +
+                      '|gallery|prompt|workflows'
+      else if Name = 'cache' then
+        Restricted := 'ai_models|icons|marketplace|model_library|plugins|updates|mingit' +
+                      '|bilibili_updates.json'
+      else if Name = 'config' then
+        Restricted := 'settings.json|environments.json|modules.json' +
+                      '|default_config.json|backups'
+      else if Name = 'logs' then
+        Restricted := 'comfynexus_*.log|comfyui'
+      else if Name = 'lora_data' then
+        Restricted := 'preview|lora_index.json'
+      else
+        Restricted := '';
+      Rc := CNX_PurgeEntries(Target, Restricted, ProtPaths, Report, DelCount, KeepCount, FailCount);
+    end;
+
+    if Rc = 0 then
+    begin
+      { 全清空了才移除目录本身；非空说明还有别人的东西 }
+      RemoveDir(Target);
+      Report := Report + 'DELETE ' + Target + CNX_NL;
+    end
+    else
+      Report := Report + 'PARTIAL ' + Target + '  (已清可删内容，保留其它文件)' + CNX_NL;
+  end;
+
+  Report := Report
+    + '总计：删除 ' + IntToStr(DelCount) + ' 项，'
+    + '保留 ' + IntToStr(KeepCount) + ' 项，'
+    + '失败 ' + IntToStr(FailCount) + ' 项，'
+    + '不存在 ' + IntToStr(NotFoundCount) + ' 项';
+  Result := Report;
+end;
+
+{
+  收尾：把「卸载器删不掉自己」这件事补完。
+
+  ── 问题（实机日志铁证）────────────────────────────────────────────────
+  卸载到最后，Inno 会去删 <安装目录>\uninst，但此刻 unins000.exe 正被自己
+  占用、unins000.dat 也被打开着：
+      Deleting file: ...\uninst\unins000.dat  → Failed (32) it may be in use
+      Deleting file: ...\uninst\unins000.exe  → Failed (5)
+      Deleting directory: ...\uninst          → Failed (145) Will retry later
+      Deleting directory: <安装目录>            → Failed (145) Will retry later
+  uninst 因此永远非空，[UninstallDelete] 的 `dirifempty` 只能跳过 →
+  **独立目录卸载后仍会残留一个只装着卸载器的 uninst**，与用户
+  「选是就把安装目录删掉」的预期不符。（混用目录本来就不该删，见下。）
+
+  ── 解法：交给一个脱离卸载器进程的脚本，等它退出后再动手 ───────────────
+  脚本在 %TEMP% 里生成，用 ewNoWait 启动，步骤：
+    1) 反复尝试删 unins000.exe —— 删成功的那一刻，说明卸载器进程已退出
+    2) 再等 2 秒，避免和它最后写 _unins-done.tmp 抢时序
+    3) 指纹确认（目录里确实有 unins*.exe）后，清空并移除 <安装目录>\uninst
+    4) **只有 <安装目录> 已经空了**才 `rd` 掉它本身
+       —— 混用目录里别人的文件还在时 rd 必然失败，目录自然保留
+    5) 删掉脚本自己
+
+  ── 为什么必须「脱离进程」──────────────────────────────────────────────
+  直接在卸载器进程里做（无论 usUninstall 还是 usPostUninstall）都会打断
+  它自己的收尾：实测 usPostUninstall 里清 uninst → 它写 "_unins-done.tmp"
+  失败 → 日志停在那一行，ComfyNexus.exe / version.json 反而不删了。
+  换成外部脚本后，卸载器的收尾完全不受影响，我们只等它死透了再补刀。
+
+  参数 AppDir = 安装目录（调用方传 ExpandConstant 的 app 常量）。
+  返回 True 表示脚本已成功生成并启动；False 时调用方只记日志，不影响卸载。
+}
+function CNX_ScheduleUninstallerCleanup(const AppDir: String): Boolean;
+var
+  Root, Helper, Body: String;
+  Raw: AnsiString;
+  Rc: Integer;
+begin
+  Result := False;
+  Root := CNX_TrimSlash(AppDir);
+  if Root = '' then
+    Exit;
+
+  Helper := ExpandConstant('{%TEMP}') + '\comfynexus_post_uninstall.cmd';
+
+  { 注意：整段都是 cmd 语法，Pascal 里只用 + 拼接、不含单引号 }
+  Body :=
+    '@echo off' + CNX_NL +
+    'setlocal EnableExtensions DisableDelayedExpansion' + CNX_NL +
+    'set "APP=' + Root + '"' + CNX_NL +
+    'set "UNI=%APP%\uninst"' + CNX_NL +
+    'set /a N=0' + CNX_NL +
+    ':retry' + CNX_NL +
+    'if not exist "%UNI%\unins000.exe" goto settle' + CNX_NL +
+    'del /f /q "%UNI%\unins000.exe" >nul 2>&1' + CNX_NL +
+    'if not exist "%UNI%\unins000.exe" goto settle' + CNX_NL +
+    'set /a N+=1' + CNX_NL +
+    'if %N% GEQ 90 goto settle' + CNX_NL +
+    'ping -n 2 127.0.0.1 >nul 2>&1' + CNX_NL +
+    'goto retry' + CNX_NL +
+    ':settle' + CNX_NL +
+    'ping -n 3 127.0.0.1 >nul 2>&1' + CNX_NL +
+    'if not exist "%UNI%" goto dropapp' + CNX_NL +
+    'if not exist "%UNI%\unins*.exe" goto dropapp' + CNX_NL +
+    'del /f /q "%UNI%\*.*" >nul 2>&1' + CNX_NL +
+    'rd /s /q "%UNI%" >nul 2>&1' + CNX_NL +
+    ':dropapp' + CNX_NL +
+    'if exist "%UNI%" goto done' + CNX_NL +
+    'rd "%APP%" >nul 2>&1' + CNX_NL +
+    ':done' + CNX_NL +
+    'del /f /q "%~f0" >nul 2>&1' + CNX_NL;
+
+  { 用系统 ANSI 代码页写盘：cmd 默认就是该代码页，中文路径才不会乱码。
+    不写 UTF-8 + chcp 65001 —— 那会引入 BOM/换行两套额外风险。 }
+  Raw := Body;
+  if not SaveStringToFile(Helper, Raw, False) then
+    Exit;
+
+  Result := Exec(ExpandConstant('{cmd}'), '/c "' + Helper + '"', '',
+                 SW_HIDE, ewNoWait, Rc);
+end;
+
