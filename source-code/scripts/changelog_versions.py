@@ -22,6 +22,42 @@ ComfyNexus 自有版本更新日志（v1.2.6 → v1.3.1）
 # 顺序：最新在前
 VERSIONS = [
     # ------------------------------------------------------------------
+    # v1.3.5
+    # ------------------------------------------------------------------
+    {
+        "version": "v1.3.5",
+        "date": "2026-10-29",
+        "type": "修复版（Stable）",
+        "body_zh": """## 🐛 问题修复
+
+- **修复「工作流目录」设置后不生效** - 环境设置 → 通用设置 → 工作区目录映射里的工作流目录，之前填好点保存会提示成功，但重新进入页面又变回空白，实际也不会生效。现在填写后会真正保存下来，重启应用也依然保留
+- **修复「Git 路径」设置丢失** - 与工作流目录同一个原因，通用设置里的 Git 路径同样存不进去，现已一并修复
+- **修复「监听地址」未配置时异常** - 网络设置里的监听地址此前在未填写时会返回空值类型异常，现已给出正确的默认空值
+- **修复配置导入导出丢失部分设置** - 导出配置再导入时，工作流目录、监听地址、缺失节点自动下载这三项会静默丢失，现已能正确往返
+- **版本更新至 v1.3.5**
+
+## 🔧 内部改进
+
+- 为环境配置的保存与读取增加了完整的自动化回归测试，覆盖全部字段的往返校验，避免同类「保存成功但实际没存」的问题再次出现
+- 修正了仓库配置，补齐此前未纳入版本管理的源码文件
+
+---
+
+## 🐛 Bug Fixes
+
+- **Fixed: the workflow directory setting did not take effect** - Under Environment Settings → General → Workspace directory mapping, the workflow directory used to report success on save but come back blank, and never actually applied. It is now genuinely persisted and survives a restart
+- **Fixed: the Git path setting was lost** - Same root cause as the workflow directory; the Git path under General settings could not be stored either and is now fixed as well
+- **Fixed: the listen address misbehaved when unset** - An unset listen address previously returned an empty-value type error; it now yields a proper empty default
+- **Fixed: importing and exporting a configuration dropped some settings** - The workflow directory, listen address and auto-download-missing-nodes flags were silently lost on an export/import round trip, and now survive it correctly
+- **Version bumped to v1.3.5**
+
+## 🔧 Internal Improvements
+
+- Added full automated regression tests for reading and writing environment settings, covering a round trip of every field so that "saved successfully but nothing was stored" cannot silently return
+- Corrected the repository configuration and restored source files that had never been under version control""",
+        "body_en": "",
+    },
+    # ------------------------------------------------------------------
     # v1.3.4
     # ------------------------------------------------------------------
     {
