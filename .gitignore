@@ -14,8 +14,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# setuptools 的产物目录叫 lib/，裸写会连带忽略真正的源码目录
+# （frontend/src/lib/utils.ts 就是这样丢了）。锚定到仓库根层级即可。
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -30,7 +32,12 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
-*.spec
+# 注意：本项目的 .spec 全部是**手写**的构建配置（build_exe.spec / build_exe_debug.spec /
+# backend/updater/updater.spec），它们不是 PyInstaller 生成的临时文件，必须入库。
+# 早先裸写 `*.spec` 导致 build_exe.spec 从未进过仓库 —— 克隆下来根本没法打包。
+!**/*.spec
+# 唯一例外：这台机器上的临时诊断 spec，里面硬编码了 G:\AI-Code-test\ 绝对路径。
+source-code/backend/scripts/ComfyNexusDiag.spec
 
 # Installer logs
 pip-log.txt
@@ -135,14 +142,18 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+# ── Python 虚拟环境 ──────────────────────────────────────────────
+# 只忽略「根目录层级的」env/venv，不要写成 `ENV/` 这种裸目录名：
+# Git 在 Windows/macOS 上大小写不敏感，`ENV/` 会连带把
+# source-code/backend/src/core/env/ 整目录忽略掉 ——
+# 结果环境配置模块 21 个源文件从未进过仓库（v1.3.4 踩过）。
 .env
 .envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+/.venv
+/venv/
+/env/
+/env.bak/
+/venv.bak/
 
 # Spyder project settings
 .spyderproject
