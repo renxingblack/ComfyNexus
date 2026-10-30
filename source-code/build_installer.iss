@@ -1,10 +1,10 @@
-; ComfyNexus v1.3.5 安装包脚本（Inno Setup 7）
+; ComfyNexus v1.3.6 安装包脚本（Inno Setup 7）
 ; 用法: ISCC.exe build_installer.iss
 ; 输入: dist\ComfyNexus\（PyInstaller COLLECT 产物）
-; 输出: 发布包\ComfyNexus-v1.3.5-setup.exe
+; 输出: 发布包\ComfyNexus-v1.3.6-setup.exe
 
 #define MyAppName "ComfyNexus"
-#define MyAppVersion "1.3.5"
+#define MyAppVersion "1.3.6"
 #define MyAppPublisher "ComfyNexus"
 #define MyAppExeName "ComfyNexus.exe"
 

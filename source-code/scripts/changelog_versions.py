@@ -22,6 +22,26 @@ ComfyNexus 自有版本更新日志（v1.2.6 → v1.3.1）
 # 顺序：最新在前
 VERSIONS = [
     # ------------------------------------------------------------------
+    # v1.3.6
+    # ------------------------------------------------------------------
+    {
+        "version": "v1.3.6",
+        "date": "2026-10-30",
+        "type": "修复版（Stable）",
+        "body_zh": """## 🐛 问题修复
+
+- **修复「工作流目录」与「用户目录」同时设置时工作流全部消失** - 当环境同时配置了「通用设置 - 用户目录」（--user-directory）与「工作区目录映射 - 工作流目录」时，ComfyUI 实际读取工作流的目录是「用户目录/default/workflows」，但此前的工作流映射逻辑错误地把目录联接建在了 ComfyUI 安装目录下的 workflows，导致联接建在了 ComfyUI 根本不会读取的位置，而真正该读的目录始终是空的，工作流面板一个都看不到。现已修正为：设置了用户目录时，联接建在「用户目录/default/workflows」；未设置时回退到原行为。同时为工作流目录等于用户默认工作流目录的情况增加了防护，避免自指向 / 循环联接
+- **版本更新至 v1.3.6**
+
+---
+
+## 🐛 Bug Fixes
+
+- **Fixed: workflows vanished when both the workflow directory and the user directory were set** - When an environment configured both the User Directory (--user-directory) under General settings and the Workflow Directory under Workspace directory mapping, ComfyUI actually reads workflows from "<user directory>/default/workflows", but the workflow-mapping logic wrongly created the junction under the ComfyUI install directory, a location ComfyUI never reads, while the real directory stayed empty and the workflow list showed nothing. The junction is now created at "<user directory>/default/workflows" when a user directory is set, falling back to the previous behavior otherwise. A guard was also added to prevent a self-referencing / circular junction when the workflow directory equals the user default workflows directory
+- **Version bumped to v1.3.6**""",
+        "body_en": "",
+    },
+    # ------------------------------------------------------------------
     # v1.3.5
     # ------------------------------------------------------------------
     {
