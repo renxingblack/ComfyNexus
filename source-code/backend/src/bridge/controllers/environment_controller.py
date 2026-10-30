@@ -848,9 +848,14 @@ class EnvironmentController:
             # 工作流目录映射（启动参数构建前，失败不阻塞）
             try:
                 acc = env_obj.config.acceleration
+                general = env_obj.config.general
                 if getattr(acc, "workflow_directory", ""):
                     from ...core.env.workflow_junction import ensure_workflow_junction
-                    ensure_workflow_junction(env_obj.path, acc.workflow_directory)
+                    # 关键：若设置了 user_directory（--user-directory），junction 必须建在
+                    # <user_directory>/user/default/workflows，而非 <comfyui_path>/user/default/workflows，
+                    # 否则 ComfyUI 读的是空目录，看不到任何工作流。
+                    user_dir = getattr(general, "user_directory", "") or ""
+                    ensure_workflow_junction(env_obj.path, acc.workflow_directory, user_dir)
             except Exception as we:
                 logger.warning(f"[launch] 工作流目录映射失败: {we}")
 
